@@ -37,6 +37,16 @@ async fn handle_connection(peers: PeerMap, stream: TcpStream, _addr: SocketAddr)
             if let Ok(mesh_msg) = serde_json::from_str::<MeshMsg>(&text) {
                 match mesh_msg {
                     MeshMsg::Register(reg) => {
+                        // 0. Verify Proof-of-Work (Sybil Defense)
+                        // Difficulty 4 (4 Hex Zeros == 2 Bytes 0x00)
+                        use sha2::{Sha256, Digest};
+                        let pow_input = format!("{}{}", reg.pub_key, reg.pow_nonce);
+                        let hash = Sha256::digest(pow_input.as_bytes());
+                        if hash[0] != 0 || hash[1] != 0 {
+                             println!("[-] Invalid PoW from {} (Possible Sybil)", reg.pub_key);
+                             return;
+                        }
+
                         // 1. Verify Signature
                         // Signed Data = "Register:<onion_address>"
                         let data = format!("Register:{}", reg.onion_address);

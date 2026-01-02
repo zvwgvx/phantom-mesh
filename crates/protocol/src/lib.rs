@@ -24,6 +24,7 @@ pub struct Registration {
     pub pub_key: String, // Hex
     pub onion_address: String,
     pub signature: String, // Signs "Register:<onion_address>" to prove ownership of Key
+    pub pow_nonce: u64,    // Proof of Work to prevent Sybil Attacks
     pub timestamp: i64,
 }
 

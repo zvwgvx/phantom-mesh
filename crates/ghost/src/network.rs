@@ -19,10 +19,26 @@ impl GhostClient {
     }
 
     pub async fn register(&mut self, pub_hex: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // PoW Solver
+        use sha2::{Sha256, Digest};
+        let mut pow_nonce: u64 = 0;
+        let start = std::time::Instant::now();
+        println!("Ghost Solving PoW...");
+        loop {
+            let input = format!("{}{}", pub_hex, pow_nonce);
+            let hash = Sha256::digest(input.as_bytes());
+            if hash[0] == 0 && hash[1] == 0 {
+                break;
+            }
+            pow_nonce += 1;
+        }
+        println!("PoW Solved in {:?}", start.elapsed());
+
         let reg = Registration {
             pub_key: pub_hex.to_string(),
             onion_address: "ghost_transient.onion".to_string(),
             signature: "sig".to_string(),
+            pow_nonce,
             timestamp: chrono::Utc::now().timestamp(),
         };
         let msg = MeshMsg::Register(reg);

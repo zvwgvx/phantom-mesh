@@ -180,10 +180,14 @@ async fn register_via_tor(
     use ed25519_dalek::Signer;
     let signature = hex::encode(signing_key.sign(sig_data.as_bytes()).to_bytes());
     
+    // Solve PoW
+    let pow_nonce = solve_pow(my_pub);
+    
     let reg = Registration {
         pub_key: my_pub.to_string(),
         onion_address: my_onion.to_string(),
         signature,
+        pow_nonce,
         timestamp: chrono::Utc::now().timestamp(),
     };
     
@@ -322,4 +326,22 @@ fn packet_verify_and_decrypt(packet: &GhostPacket, key: &[u8]) -> Option<Command
 
 fn process_command(cmd: &CommandPayload) {
     println!("EXECUTING: {} [{}]", cmd.action, cmd.id);
+}
+
+fn solve_pow(pub_key: &str) -> u64 {
+    use sha2::{Sha256, Digest};
+    let mut nonce: u64 = 0;
+    println!("[*] Solving PoW (Constraint: 4 Hex Zeros)...");
+    let start = std::time::Instant::now();
+    loop {
+        let input = format!("{}{}", pub_key, nonce);
+        let hash = Sha256::digest(input.as_bytes());
+        // Difficulty 4 => First 2 bytes must be 0x00 (0000 in hex)
+        if hash[0] == 0 && hash[1] == 0 {
+            let dur = start.elapsed();
+            println!("[+] PoW Solved in {:?}. Nonce: {}", dur, nonce);
+            return nonce;
+        }
+        nonce += 1;
+    }
 }
