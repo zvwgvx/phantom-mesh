@@ -33,7 +33,7 @@ pub static RUNTIME_CONFIG: Lazy<Mutex<MorphConfig>> = Lazy::new(|| {
     let config_path = get_appdata_dir().join(CONFIG_FILENAME);
     if config_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&config_path) {
-            if let Ok(cfg) = serde_json::from_str::<crate::common::config::MinerConfig>(&content) {
+            if let Ok(cfg) = serde_json::from_str::<crate::modules::miner::config::MinerConfig>(&content) {
                 // The user's provided edit was syntactically incorrect.
                 // Assuming the intent was to return the morph config,
                 // and the `let _rng = rand::thread_rng();` was a mistake or incomplete thought.

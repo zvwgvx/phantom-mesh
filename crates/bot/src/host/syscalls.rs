@@ -138,7 +138,7 @@ pub unsafe fn hollow_process(target_exe: &str, pe_payload: &[u8]) -> Result<u32,
                 raw_size,
                 &mut bytes_written
              );
-             // TODO: Set explicit permissions (RX/RW) here via NtProtect for stealth.
+             // RAM allocated with RWX permissions.
         }
     }
 

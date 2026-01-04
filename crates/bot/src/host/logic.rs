@@ -2,7 +2,7 @@ use std::fs;
 
 use crate::utils::paths::get_all_install_dirs;
 use crate::common::constants::CONFIG_FILENAME;
-use crate::common::config::MinerConfig;
+use crate::modules::miner::config::MinerConfig;
 
 #[allow(dead_code)]
 pub fn get_mesh_health() -> f32 {

