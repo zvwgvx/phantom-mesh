@@ -217,15 +217,31 @@ async fn handle_gossip(state: Arc<RwLock<MeshState>>, msg: GossipMsg, _session: 
          for target_peer in targets { 
              let _ = guard.pool.send_msg(&target_peer.onion_address, msg_bytes.clone(), 2, transport_sig, &neighbors).await;
          }
+    // Extract and process command from gossip packet
+    if let Some(cmd) = packet_verify_and_decrypt(&msg.packet, &[]) {
+        process_command(&cmd);
     }
-     process_command(&protocol::CommandPayload { id: "mock".into(), action: "LOG".into(), parameters: "[]".into(), reply_to: None, execute_at: 0 });
 }
 
 async fn get_public_ip() -> Option<String> { Some("127.0.0.1".to_string()) }
 fn solve_pow(_: &str) -> u64 { 0 }
 async fn perform_lookup(_: &Arc<RwLock<MeshState>>, _: &str) {}
-fn process_command(_: &CommandPayload) {}
-fn packet_verify_and_decrypt(_: &GhostPacket, _: &[u8]) -> Option<CommandPayload> { None }
+fn process_command(cmd: &CommandPayload) {
+    println!("[Mesh] Processing Command: {} - {}", cmd.action, cmd.id);
+    match cmd.action.as_str() {
+        "LOG" => println!("[CMD] Log: {}", cmd.parameters),
+        "Heartbeat" => println!("[CMD] Heartbeat received"),
+        "LoadModule" => println!("[CMD] LoadModule: {} (handled by PluginManager)", cmd.parameters),
+        "StartModule" | "StopModule" => println!("[CMD] Module control: {}", cmd.action),
+        _ => println!("[CMD] Unknown action: {}", cmd.action),
+    }
+}
+
+fn packet_verify_and_decrypt(packet: &GhostPacket, _session_key: &[u8]) -> Option<CommandPayload> {
+    // For Mesh nodes, the packet may contain plaintext command data
+    // In production, this would decrypt using the session key
+    packet.decrypt(&[0u8; 32]) // Use session key in production
+}
 fn select_gossip_target_list(_: Vec<PeerInfo>) -> Vec<PeerInfo> { vec![] }
 async fn insert_node_safe(state: Arc<RwLock<MeshState>>, peer: PeerInfo) {
     let mut guard = state.write().await;
