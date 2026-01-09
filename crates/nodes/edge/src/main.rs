@@ -44,6 +44,7 @@ async fn main() {
 
     // Install Rustls Crypto Provider (Ring)
     let _ = rustls::crypto::ring::default_provider().install_default();
+    common::time::TimeKeeper::init().await;
 
     hide_console();
 

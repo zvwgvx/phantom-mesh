@@ -31,10 +31,12 @@ mainline = "1.0"
 
 # Internal
 protocol = { path = "../../core/protocol" }
+common = { path = "../../core/common" }
 
-# Tor
+# WebSocket
 tokio-tungstenite = { version = "0.28.0", features = ["native-tls"] }
-tokio-socks = "0.5"
 
 futures-util = "0.3"
 url = "2.5"
+sntpc = { version = "0.3.6", features = ["std", "utils"] }
+reqwest = { version = "0.11", features = ["json", "stream"] }

@@ -42,6 +42,7 @@ mainline = "1.0"
 
 # Internal
 protocol = { path = "../../core/protocol" }
+common = { path = "../../core/common" }
 
 # Utils
 zip = "0.6"

@@ -1,112 +1,78 @@
-# AutoMine Mesh: Advanced Decentralized Botnet
+# Phantom Mesh: Advanced Decentralized Infrastructure
 
-> **STATUS**: ACTIVE
-> **VERSION**: 3.5 (Platform Split + Hybrid Modules)
-> **ARCHITECTURE**: P2P Tor Mesh (Gossip Protocol)
-> **VISIBILITY**: INVISIBLE (Tor Hidden Services)
-> **PLATFORMS**: Windows (Full) & Linux (Lite)
+**STATUS**: ACTIVE DEVELOPMENT
+**ARCHITECTURE**: Autonomous P2P Mesh (QUIC + DHT)
+**VISIBILITY**: Stealth (Encrypted UDP, Parasitic Discovery)
 
 ## 1. System Overview
 
-AutoMine is a research-grade, fully decentralized botnet architecture. It operates without a central Command & Control (C2) server, utilizing a **Tor Hidden Service P2P Mesh** for resilience and anonymity.
+Phantom Mesh is a research-grade decentralized network architecture focusing on resilience, anonymity, and NAT traversal. Unlike traditional Tor-based botnets, Phantom utilizes a custom **QUIC-based P2P protocol** combined with **Parasitic DHT Discovery** (BitTorrent Mainline) to operate without static entry points or central C2 servers.
 
-### The Trinity Architecture
+### The Component Architecture
 
-1.  **👑 Master (C2 Controller)**:
-    *   Stateless command injector.
-    *   Connects to any random node in the mesh via Tor.
-    *   Injects **Ed25519 Signed Commands**.
-    *   Vanishes immediately after broadcasting.
+1.  **Phantom Mesh (Infrastructure Node)**:
+    *   **Role**: Stable relay and signaling arbiter.
+    *   **Network**: Requires public IP or port forwarding (Full Cone NAT).
+    *   **Function**:
+        *   Acts as a **Bursting Arbiter** to coordinate NAT hole punching between Edge nodes.
+        *   Announces presence to the global BitTorrent DHT (Parasitic Discovery).
+        *   Relays Gossip messages across the network.
 
-2.  **🛡️ Bot Windows (Heavy Agent)**:
-    *   **Full Feature Set**: Miner, Persistence, Ransomware, DDoS, P2P.
-    *   **Persistence**: Registry Run Keys, Startup Folder, Service Masquerading.
-    *   **Mining**: XMRig integration with process hollowing and smart config.
+2.  **Phantom Edge (Worker Node)**:
+    *   **Role**: Ephemeral worker operating behind strict NATs.
+    *   **Network**: UDP/QUIC (Simulated Client Traffic).
+    *   **Function**:
+        *   **Parasitic Discovery**: Queries public DHTs (e.g., `router.bittorrent.com`) to find Mesh nodes without hardcoded IPs.
+        *   **Bursting Arbiter**: executes synchronized UDP bursts to punch holes through firewalls/NATs upon command.
+        *   Executes modular payloads (DDoS, Scanning, etc.).
 
-3.  **⚡ Bot Linux (Lite Agent)**:
-    *   **Optimized for Servers**: High bandwidth/CPU focus.
-    *   **Features**: P2P Mesh, Advanced DDoS, Ransomware.
-    *   **Stripped**: No Mining, No Persistence (Systemd/Cron left to operator).
+## 2. Core Technologies
 
-## 2. Capabilities & Modules
+### Transport: Custom QUIC
+*   **Implementation**: Built on `quinn` (IETF QUIC) and `rustls` (TLS 1.3).
+*   **Security**:
+    *   **Encryption**: ChaCha20Poly1305 (AEAD) for payload protection.
+    *   **Authentication**: Ed25519 digital signatures for verifying command integrity.
+    *   **Stealth**: Random packet padding to defeat traffic analysis.
 
-### 💥 DDoS Module (Layer 4 & 7)
-*   **Layer 4 (Transport)**:
-    *   `UDP_FLOOD`: High-volume packet spam.
-    *   `TCP_SYN`: SYN flood to exhaust connection tables.
-    *   `TCP_ACK`: ACK spam to bypass stateful firewalls.
-*   **Layer 7 (Application)**:
-    *   `HTTP_FLOOD`: Smart GET/POST requests with cache bypassing.
-    *   `HTTP_RECURSIVE`: Spiders the target functionality to consume backend resources.
-    *   `SLOWLORIS`: Holds connections open to exhaust Apache/Nginx workers.
-    *   `HTTP_RUDY`: "R-U-Dead-Yet" POST flood.
-    *   `HTTP2`: Multiplexing stream flood (CVE-2019-9511 style).
+### NAT Traversal: "Bursting Arbiter"
+State-of-the-art hole punching technique to connect two nodes behind separate NATs:
+1.  **Coordination**: Mesh node (Arbiter) measures Round-Trip Time (RTT) to both Edge nodes.
+2.  **Synchronization**: Arbiter calculates a precise `fire_delay` and sends a `SignalMsg::ArbiterCommand` to both peers.
+3.  **The Burst**: Both Edge nodes fire a high-frequency burst (50 packets/sec) of dummy UDP packets at each other's expected public endpoint simultaneously.
+4.  **Connection**: NAT mapping is created, allowing the subsequent QUIC handshake to succeed.
 
-### 🔒 Ransomware Module
-*   **Cryptography**: Hybrid Scheme.
-    *   **Asymmetric**: X25519 (Elliptic Curve) for key exchange.
-    *   **Symmetric**: ChaCha20Poly1305 (AEAD) for high-speed file encryption.
-*   **Features**:
-    *   **Intermittent Encryption**: Encrypts chunks of large files for speed.
-    *   **Multi-threading**: Uses `Rayon` for parallel directory walking.
-    *   **Safety**: Skips system directories (Windows, Program Files, /proc, /sys).
-    *   **Notification**: Pop-up window & Desktop Text file.
+### Parasitic Discovery
+Leverages the global, immutable BitTorrent DHT infrastructure:
+*   **Mesh Nodes**: Periodically announce their IP:Port to a rolling InfoHash derived from the current date.
+*   **Edge Nodes**: Calculate the daily InfoHash and query standard DHT bootstraps to effect decentralized peer discovery.
+*   **Result**: No central directory to seize; discovery logic is embedded in the public internet infrastructure.
 
-### ⛏️ Miner Module (Windows Only)
-*   **XMRig Core**: Embedded Monero miner.
-*   **Stealth**: Injects into legitimate system processes (Process Hollowing).
-*   **Smart throttling**: Auto-pause on user activity (mouse/keyboard).
+## 3. Usage & building
 
-## 3. Usage Guide
+### Requirements
+*   Rust 2021 Edition (stable)
+*   Build tools (`build-essential`, `cmake`)
 
-### 🛠️ One-Step Build
-Use the unified generator script to compile the toolchain for both platforms.
+### Build Command
+Compile the entire workspace (Mesh + Edge + Tools):
 
 ```bash
-./scripts/generate.sh
-```
-*Outputs:*
-*   `target/release/master` (Controller)
-*   `target/release/bot_windows.exe` (Windows Agent)
-*   `target/release/bot_linux` (Linux Agent)
-
-### 📡 Deploy Bootstrap
-(Optional: Required for new nodes to find the mesh initially)
-```bash
-./target/release/bootstrap
-# Output: Listening on 127.0.0.1:8080 (Mapped to Tor HS 80)
+cargo build --release --workspace
 ```
 
-### 🎮 Master Control
-The `master` tool is your command center.
-
-**1. List Active Nodes (via Bootstrap Registry):**
-```bash
-./target/release/master list --bootstrap "ws://bootstrap_onion_address"
-```
-
-**2. Broadcast Global Command:**
-```bash
-# Syntax: ACTION PARAMETERS
-./target/release/master broadcast \
-  --bootstrap "ws://bootstrap_onion_address" \
-  --key "keys/master.key" \
-  --cmd "DDOS_L4 1.1.1.1|80|60|UDP_RANDOM"
-```
-
-**Supported Commands:**
-*   `DDOS_L4 <IP>|<PORT>|<DURATION>|<METHOD>`
-*   `DDOS_L7 <URL>|<PORT>|<DURATION>|<METHOD>`
-*   `RANSOMWARE` (Triggers encryption)
-*   `START_MINER` (Windows Only)
-*   `STOP_MINER` (Windows Only)
-*   `KILL_BOT` (Self-destruct)
+### Binaries
+*   `target/release/phantom_mesh`: Infrastructure node (run on VPS/Server).
+*   `target/release/phantom_edge`: Worker node (run on Client).
+*   `target/release/loader`: Standalone module loader.
 
 ## 4. Technical Stack
--   **Language**: Rust (2024 Edition).
--   **Network**: `arti` (Tor), `tokio` (Async), `serde` (JSON).
--   **Crypto**: `ed25519-dalek`, `chacha20poly1305`, `x25519-dalek`.
+*   **Language**: Rust
+*   **Async Runtime**: `tokio`
+*   **Transport**: `quinn`, `rustls`
+*   **Discovery**: `mainline` (Kademlia/DHT)
+*   **Crypto**: `ed25519-dalek`, `chacha20poly1305`
+*   **Serialization**: `serde`, `serde_json`
 
 ---
-
-> **⚠️ EDUCATIONAL USE ONLY**: This software is designed for red-teaming and research into decentralized network resilience. The author is not responsible for illegal misuse. Be ethical.
+**DISCLAIMER**: This software is for educational research into resilient network architectures only.

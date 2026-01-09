@@ -11,41 +11,24 @@ use std::path::PathBuf;
 use tokio::io::{AsyncRead, AsyncWrite};
 use rand_core::OsRng;
 use x25519_dalek::{EphemeralSecret, PublicKey};
-// OsRng is at line 12
 
 // Ghost P2P Client (Transient Connection)
 // Ghost connects, drops payload, disconnects.
-// Refactored to be Generic over the Stream Type (S)
-// This allows supporting both direct TCP/TLS (Bootstrap) and SOCKS5 (Hidden Services).
+// Refactored to use direct WebSocket connections (QUIC transport is handled at node level)
 pub struct GhostClient<S> {
     ws_stream: WebSocketStream<S>, 
 }
-
 
 impl GhostClient<MaybeTlsStream<TcpStream>> {
     pub async fn connect(url: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let (ws_stream, _) = connect_async(url).await?;
         Ok(GhostClient { ws_stream })
     }
-}
-
-impl GhostClient<tokio_socks::tcp::Socks5Stream<TcpStream>> {
-    pub async fn connect_via_tor(onion_host: &str, port: u16, proxy_addr: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        use tokio_socks::tcp::Socks5Stream;
-        use tokio_tungstenite::client_async;
-        use url::Url;
-
-        println!("Connecting via SOCKS5 Proxy: {} -> {}:{}", proxy_addr, onion_host, port);
-        
-        // 1. Connect via SOCKS5 to Onion Service
-        let stream = Socks5Stream::connect(proxy_addr, (onion_host, port)).await?;
-        
-        // 2. Upgrade to WebSocket
-        let url_str = format!("ws://{}:{}/ws", onion_host, port);
-        
-        let (ws_stream, _) = client_async(url_str, stream).await?;
-        
-        Ok(GhostClient { ws_stream })
+    
+    /// Connect directly to a peer address (IP:Port) via WebSocket
+    pub async fn connect_direct(peer_address: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let url = format!("ws://{}/ws", peer_address);
+        Self::connect(&url).await
     }
 }
 
@@ -96,7 +79,7 @@ where S: AsyncRead + AsyncWrite + Unpin
 
         let reg = Registration {
             pub_key: pub_hex.to_string(),
-            onion_address: "ghost_transient.onion".to_string(),
+            peer_address: "ghost_transient".to_string(),
             signature: "sig".to_string(),
             pow_nonce,
             timestamp: chrono::Utc::now().timestamp(),
@@ -123,17 +106,9 @@ where S: AsyncRead + AsyncWrite + Unpin
     // Inject Gossip into a connected Node
     pub async fn inject_command(&mut self, payload: CommandPayload, sign_key: &SigningKey, session_key: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         // Encrypt Payload (Ghost -> Mesh)
-        // Note: In real mesh, we might use a shared mesh key or individual recipient? 
-        // For 'Broadcast', we use a Shared Swarm Key usually, or we re-encrypt at boundaries.
-        // The user spec said "Ghost asks Bootstrap for 1 Node, connects, sends Gossip, disconnects".
-        // The Payload is encrypted. Let's assume Shared Swarm Key or Node Key.
-        // For simplicity: Using Session Key passed in (which is effectively the Swarm Key here for broadcast).
-        
-        // Sign
-        // 1. Serialize Payload
         let json_payload = serde_json::to_string(&payload)?;
 
-        // 2. Encrypt (ChaCha20Poly1305) using Session Key
+        // Encrypt (ChaCha20Poly1305) using Session Key
         use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, AeadCore};
         use chacha20poly1305::aead::Aead;
         
@@ -144,21 +119,14 @@ where S: AsyncRead + AsyncWrite + Unpin
              return Err("Invalid Session Key length".into());
         }
         let cipher = ChaCha20Poly1305::new(&Key::from(key_bytes));
-        let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng); // 96-bits
+        let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
         let ciphertext = cipher.encrypt(&nonce, json_payload.as_bytes()).map_err(|_| "Encryption Failed")?;
         
-        // 3. Create Packet (Signed)
-        // CommandType::StartModule is a generic execution wrapper.
+        // Create Packet (Signed)
         use protocol::CommandType;
         let mut packet = GhostPacket::new(CommandType::StartModule, ciphertext, sign_key);
         
-        // Append Nonce to packet? 
-        // GhostPacket definition has `nonce: u64` (salt), but standard ChaCha20Poly1305 uses 12-byte nonce.
-        // The `GhostPacket` definition in `packet.rs` has `pub nonce: u64`. This is for Replay Protection usually.
-        // The ciphertext ITSELF usually includes the Auth Tag. The Nonce for encryption must be transmitted too!
-        // Current `GhostPacket` structure: `data` (Vec<u8>).
-        // Best practice: Prepend Nonce to ciphertext in `data`.
-        
+        // Prepend Nonce to ciphertext in `data`
         let mut final_data = nonce.to_vec();
         final_data.extend(packet.data); 
         packet.data = final_data;

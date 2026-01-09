@@ -2,7 +2,7 @@ use sha2::{Sha256, Digest};
 use protocol::PeerInfo;
 use std::cmp::Ordering;
 
-const K_BUCKET_SIZE: usize = 10; // Optimized for Tor
+const K_BUCKET_SIZE: usize = 10; // Standard Kademlia bucket size
 const ID_SIZE: usize = 32; // 256-bit Key Space (SHA256 / Ed25519-compatible)
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,7 +78,7 @@ impl RoutingTable {
     }
 
     pub fn insert(&mut self, peer: PeerInfo) -> InsertResult {
-        let other_id = NodeId::new(&peer.onion_address);
+        let other_id = NodeId::new(&peer.peer_address);
         if other_id == self.my_id { return InsertResult::Updated; }
         
         let dist = self.my_id.distance(&other_id);
@@ -90,7 +90,7 @@ impl RoutingTable {
         let bucket = &mut self.buckets[bucket_idx];
         
         // 1. Check if Node Exists -> Update
-        if let Some(pos) = bucket.iter().position(|p| p.onion_address == peer.onion_address) {
+        if let Some(pos) = bucket.iter().position(|p| p.peer_address == peer.peer_address) {
             bucket[pos] = peer;
             // Move to tail (Most Recently Seen)
             let item = bucket.remove(pos);
@@ -106,7 +106,7 @@ impl RoutingTable {
         
         // 3. Bucket Full -> Add to Replacement Cache
         let replacement_bucket = &mut self.replacements[bucket_idx];
-        if let Some(pos) = replacement_bucket.iter().position(|p| p.onion_address == peer.onion_address) {
+        if let Some(pos) = replacement_bucket.iter().position(|p| p.peer_address == peer.peer_address) {
             replacement_bucket[pos] = peer;
         } else if replacement_bucket.len() < K_BUCKET_SIZE {
             replacement_bucket.push(peer);
@@ -128,7 +128,7 @@ impl RoutingTable {
         let bucket_idx = if prefix_len >= 256 { 255 } else { prefix_len };
         
         let bucket = &mut self.buckets[bucket_idx];
-        if let Some(pos) = bucket.iter().position(|p| p.onion_address == evict_onion) {
+        if let Some(pos) = bucket.iter().position(|p| p.peer_address == evict_onion) {
             bucket.remove(pos);
             bucket.push(new_peer);
         }
@@ -144,8 +144,8 @@ impl RoutingTable {
         }
         
         candidates.sort_by(|a, b| {
-            let id_a = NodeId::new(&a.onion_address);
-            let id_b = NodeId::new(&b.onion_address);
+            let id_a = NodeId::new(&a.peer_address);
+            let id_b = NodeId::new(&b.peer_address);
             let dist_a = id_a.distance(&target_id);
             let dist_b = id_b.distance(&target_id);
             dist_a.cmp(&dist_b)

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     # Core infrastructure
     "crates/core/protocol",
+    "crates/core/common",
     
     # Node applications
     "crates/nodes/mesh",

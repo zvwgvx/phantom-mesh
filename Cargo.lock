@@ -466,6 +466,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "sha1",
+ "sntpc",
+ "tokio",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1994,6 +2005,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "clap",
+ "common",
  "dirs",
  "ed25519-dalek",
  "env_logger",
@@ -2047,6 +2059,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "clap",
+ "common",
  "ed25519-dalek",
  "env_logger",
  "futures-util",
@@ -2056,12 +2069,13 @@ dependencies = [
  "protocol",
  "rand 0.8.5",
  "rand_core 0.6.4",
+ "reqwest",
  "serde",
  "serde_json",
  "sha1",
  "sha2",
+ "sntpc",
  "tokio",
- "tokio-socks",
  "tokio-tungstenite 0.28.0",
  "url",
  "uuid",
@@ -2077,6 +2091,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "clap",
+ "common",
  "dirs",
  "ed25519-dalek",
  "env_logger",
@@ -3291,18 +3306,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
  "rustls 0.23.36",
- "tokio",
-]
-
-[[package]]
-name = "tokio-socks"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d4770b8024672c1101b3f6733eab95b18007dbe0847a8afe341fcf79e06043f"
-dependencies = [
- "either",
- "futures-util",
- "thiserror 1.0.69",
  "tokio",
 ]
 

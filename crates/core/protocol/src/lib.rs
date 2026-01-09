@@ -11,7 +11,7 @@ pub enum NodeRole {
 
 pub use packet::{
     PhantomPacket, GhostPacket, CommandType, CommandPayload,
-    MeshMsg, GossipMsg, Registration, AckPayload, PeerInfo
+    MeshMsg, GossipMsg, Registration, AckPayload, PeerInfo, SignalMsg
 };
 pub use transport::PhantomTransport;
 pub mod quic;
