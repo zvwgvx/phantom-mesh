@@ -51,14 +51,7 @@ pub fn sign_command(payload: &CommandPayload, key: &SigningKey) -> GhostPacket {
     let payload_json = serde_json::to_string(payload).unwrap();
     let data = payload_json.as_bytes().to_vec();
     
-    // For now, Master uses a generic command type or specific if we passed it. 
-    // But sign_command takes CommandPayload. 
-    // Protocol's PhantomPacket::new handles signing.
-    
     use protocol::{PhantomPacket, CommandType};
+    // Sign the command payload
     PhantomPacket::new(CommandType::LoadModule, data, key) 
-    // Wait, CommandType needs to vary? For now let's use LoadModule as placeholder or Generic?
-    // The previous code had specific actions in payload.
-    // Let's use 0x01 (DDoS) or add a specific "Admin" type? 
-    // Existing CommandType has LoadModule.
 }

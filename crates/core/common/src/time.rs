@@ -1,6 +1,5 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::sync::atomic::{AtomicI64, Ordering};
-use reqwest::Client;
 use sntpc::NtpContext;
 use std::net::UdpSocket;
 use chrono::{DateTime, Utc};
@@ -26,10 +25,7 @@ impl TimeKeeper {
     pub async fn synchronize() -> Result<(), String> {
         let network_time = match Self::get_ntp_time() {
             Ok(t) => t,
-            Err(_) => match Self::get_http_time().await {
-                Ok(t) => t,
-                Err(e) => return Err(e),
-            }
+            Err(e) => return Err(e),
         };
 
         let system_time = SystemTime::now()
@@ -70,28 +66,6 @@ impl TimeKeeper {
             }
         }
         Err("All NTP servers failed".into())
-    }
-
-    async fn get_http_time() -> Result<i64, String> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
-            .map_err(|e| e.to_string())?;
-            
-        let targets = ["https://www.google.com", "https://www.microsoft.com", "https://www.cloudflare.com"];
-        
-        for url in targets {
-            if let Ok(resp) = client.head(url).send().await {
-                if let Some(date_header) = resp.headers().get("date") {
-                    if let Ok(date_str) = date_header.to_str() {
-                        if let Ok(dt) = DateTime::parse_from_rfc2822(date_str) {
-                            return Ok(dt.with_timezone(&Utc).timestamp());
-                        }
-                    }
-                }
-            }
-        }
-        Err("All HTTP fallback servers failed".into())
     }
 }
 

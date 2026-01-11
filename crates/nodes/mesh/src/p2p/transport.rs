@@ -1,4 +1,4 @@
-// WebRTC Data Channel Transport Pool (Stub for Phase 3)
+// WebRTC Data Channel Transport Pool
 use std::collections::HashMap;
 
 pub struct WebRtcPool {

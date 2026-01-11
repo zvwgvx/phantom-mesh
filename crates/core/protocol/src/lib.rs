@@ -35,4 +35,3 @@ pub struct CommandPacket {
 }
 
 pub use transport::PhantomTransport;
-// pub mod quic; // Removed in V3.3

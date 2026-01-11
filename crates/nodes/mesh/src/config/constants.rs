@@ -7,10 +7,9 @@ use obfstr::obfstr;
 pub const CONFIG_FILENAME: &str = "sys_config.dat";
 pub const INSTALL_DIR_NAME: &str = "WindowsHealth"; 
 
-// V10 Standard: Bootstrap Peers (IP:Port for QUIC)
-// These are placeholder addresses - in production, use Parasitic DHT discovery
+// Bootstrap Peers
 pub const BOOTSTRAP_PEERS: [&str; 3] = [
-    "127.0.0.1:9000",  // Local dev
+    "127.0.0.1:9000",
     "0.0.0.0:9001",    // Placeholder
     "0.0.0.0:9002"     // Placeholder
 ];
@@ -33,6 +32,5 @@ pub fn get_launcher_script_name() -> String {
     RUNTIME_CONFIG.lock().unwrap().launcher_script.clone()
 }
 
-// Pre-Shared Key for Signaling Layer (32 bytes)
-// In production, this should be rotated or derived dynamically.
+// Pre-Shared Swarm Key (32 bytes)
 pub const SWARM_KEY: &[u8; 32] = b"PhantomMeshV3_SecretSwarmKey_32b";

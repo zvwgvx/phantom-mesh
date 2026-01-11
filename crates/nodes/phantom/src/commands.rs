@@ -30,7 +30,8 @@ pub async fn handle_list(bootstrap: Option<String>) {
     }
     
     println!("Attempting to list peers via: {:?}", targets);
-    // For MVP, just connect to one and print success (since List logic on P2P is complex/DHT-based)
+    
+    // Connect to the first discovered target to retrieve network status
     if let Some(target) = targets.first() {
          if let Err(e) = client.dial(target).await {
              eprintln!("Dial Failed: {}", e);
@@ -75,7 +76,7 @@ pub async fn handle_broadcast_custom(bootstrap: Option<String>, key_path: PathBu
     };
     
     // 3. Connect to Multiple Entry Nodes (Multi-Point Injection)
-    // "Hoạt động như node khác gossip" -> Connect to multiple neighbors to ensure propagation.
+    // Connect to multiple random neighbors to propagate gossip naturally
     let mut rng = rand::thread_rng();
     let mut shuffled = targets.clone();
     shuffled.shuffle(&mut rng);

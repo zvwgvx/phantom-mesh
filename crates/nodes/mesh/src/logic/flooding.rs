@@ -44,22 +44,7 @@ impl FloodingManager {
              signature_bytes.copy_from_slice(&packet.signature);
              let signature = Signature::from_bytes(&signature_bytes);
              
-             // Construct message to verify: It should be the serialized payload or specific fields?
-             // protocol::PhantomPacket::sign() signs the `digest()`. 
-             // We need to match that logic. 
-             // Packet.verify() method exists in `protocol`, we should use that instead of re-implementing!
-             // Check `packet.rs`. `PhantomPacket::verify(&self, key)`.
-             
-             // Actually `CommandPacket` in `flooding.rs` line 1 might be `PhantomPacket` alias?
-             // Let's check imports in flooding.rs.
-             
-             // Re-implementing logic here for now to be safe, but ideally calls packet.verify(vk).
-             // Since `packet` is `CommandPacket` (likely `PhantomPacket`), let's use its method if available.
-             // If not, use manual verification logic matching `packet.rs`.
-             
-             // Based on packet.rs: msg = self.digest().
-             // If we don't have access to .digest(), we rely on packet.verify().
-             
+             // Verify using the packet's internal verification logic which handles digest construction
              return packet.verify(&vk);
         }
 

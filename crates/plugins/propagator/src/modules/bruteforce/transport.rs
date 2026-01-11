@@ -20,7 +20,6 @@ pub async fn try_telnet_login(ip: &str, port: u16, user: &str, pass: &str) -> bo
         
         // 3. Read Password prompt
         if tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await.is_err() {
-            // Some dumb telnets might login immediately if no pass?
             // continue to shell check
         }
         
@@ -32,7 +31,6 @@ pub async fn try_telnet_login(ip: &str, port: u16, user: &str, pass: &str) -> bo
              let response = String::from_utf8_lossy(&buf[..n]);
              // Common shell indicators
              if response.contains('#') || response.contains('$') || response.contains('>') || response.contains('%') {
-                 // Check if it's just a "Login Failed" message that happens to have a prompt char
                  if response.to_lowercase().contains("fail") || response.to_lowercase().contains("bad") {
                      return false;
                  }

@@ -666,10 +666,10 @@ dependencies = [
  "chrono",
  "hex",
  "mainline",
- "reqwest",
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "sntpc",
  "tokio",
 ]

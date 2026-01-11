@@ -9,12 +9,13 @@ tokio = { version = "1", features = ["time"] }
 
 # Time Sync
 sntpc = { version = "0.3.6", features = ["std", "utils"] }
-reqwest = { version = "0.11", features = ["json"] }
+# reqwest removed for Zero-Dependency
 chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Discovery
 sha1 = "0.10"
+sha2 = "0.10"
 hex = "0.4"
 mainline = "1.0"

@@ -88,8 +88,6 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
         
         #[cfg(windows)]
         {
-            // Re-apply hidden attributes to copied files if needed, 
-            // but we will do a blanket hide later.
         }
     }
     Ok(())

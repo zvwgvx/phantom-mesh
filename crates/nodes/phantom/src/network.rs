@@ -60,7 +60,7 @@ impl GhostClient {
 
 // ...
 
-        // Correct SwarmBuilder usage for Libp2p 0.53+
+        // Initialize Swarm
         let swarm = libp2p::SwarmBuilder::with_existing_identity(id_keys)
             .with_tokio()
             .with_other_transport(|_key| transport)?
@@ -92,23 +92,12 @@ impl GhostClient {
     }
 
     pub async fn inject_command(&mut self, payload: CommandPayload, sign_key: &SigningKey, _session_key: &[u8]) -> Result<(), Box<dyn Error>> {
-        // In P2P V3, we don't use a Session Key for Injection into GossipSub.
-        // We act as a valid node signing a Gossip Message. 
-        // HOWEVER, the Payload might need encryption if we want confidentiality.
-        // For simplicity/Robustness, Ghost injects directly.
-        // If we want to use the SWARM_KEY, we should import it or accept it.
-        // User cleaned up "Plaintext Demo", so we should ideally encrypt.
-        // But GhostClient is external. Let's assume for now we send Plaintext CommandPayload wrapped in Signed Packet
-        // OR we use the same SWARM_KEY logic.
-        // Given we are refactoring, let's keep it simple: Inject Signed Packet.
+        // Inject Signed Packet into GossipSub
         
         // Serialize Payload
         let json_payload = serde_json::to_string(&payload)?;
 
-        // Encrypt (Optional - skipping for Ghost MVP to ensure connectivity first, or use a hardcoded Swarm Key if needed)
-        // Let's use Plaintext for CommandPayload inside the Signed Packet for now, 
-        // as the "Encryption" work was focused on WebRTC Signaling (Handshake), not necessarily Gossip Data.
-        // Wait, `FloodingManager` logic wasn't fully shown but typically it verifies signature.
+        // Payload Encryption skipped for MVP (Relying on Signed Packet integrity)
         
         let data = json_payload.as_bytes().to_vec();
 

@@ -81,7 +81,6 @@ impl SignalingManager {
         })
     }
     
-    // Better API: new returns (Self, Sender, Receiver)
     pub fn new_with_channel(local_key: libp2p::identity::Keypair, topic_str: &str, listen_port: u16) 
         -> Result<(Self, mpsc::Sender<SignalingCommand>, mpsc::Receiver<(String, SignalEnvelope)>), Box<dyn std::error::Error>> 
     {
@@ -132,7 +131,6 @@ impl SignalingManager {
 
     pub async fn run_loop(mut self) {
         let _ = self.swarm.behaviour_mut().gossipsub.subscribe(&self.topic);
-        // listen_on is called in new() now to ensure binding before return.
 
         
         loop {

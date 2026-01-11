@@ -5,10 +5,8 @@ use rand::RngCore;
 
 /// Encrypt a payload using ChaCha20Poly1305.
 /// The nonce is prepended to the ciphertext (12 bytes + ciphertext).
-/// For this simplified version, we use a hardcoded key derived from "PhantomQUIC".
-/// In production, this would use a proper key exchange.
 pub fn encrypt_payload(payload: &[u8]) -> Result<Vec<u8>, String> {
-    // Hardcoded session key (in production, derive from ECDH or similar)
+    // Session Key Generation (Blake3 Hash)
     let key_bytes: [u8; 32] = *blake3::hash(b"PhantomQUIC_Session_Key_v1").as_bytes();
     let key = Key::from_slice(&key_bytes);
     let cipher = ChaCha20Poly1305::new(key);

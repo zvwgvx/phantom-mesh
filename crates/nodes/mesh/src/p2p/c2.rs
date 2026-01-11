@@ -52,14 +52,7 @@ pub async fn start_client(_bootstrap_override: Option<String>) -> Result<(), Box
         while let Some((peer_id, envelope)) = signaling_rx.recv().await {
              println!("[C2] Received Signal from {}: Targets={}", peer_id, envelope.targets.len());
              
-             // Simplification: Assume we are a target and decipher Payload.
-             // Protocol: Payload is encrypted. 
-             // Logic: Check if we are in targets.
-             // For "Concept Check", we assume the payload *is* the SDP for us.
-             // Real logic: Decrypt, extract SDP.
-             // If payload starts with "{" (JSON SDP Offer)
-             
-             // Extract first target payload as "Data" for demo
+             // Process payload if we are the target
              if let Some(first) = envelope.targets.first() {
                      // Decrypt Payload using Swarm Key
                      if let Some(decrypted_bytes) = decrypt_payload(&first.encrypted_data) {
@@ -121,21 +114,13 @@ pub async fn start_client(_bootstrap_override: Option<String>) -> Result<(), Box
                 Ok(peers) => {
                     println!("[+] Discovered {} Potential Neighbors.", peers.len());
                     
-                    // Harvest Connections: Dial 15 random peers
-                    // Spec 4.2: Select 15 IP targets
-                    // We assume peers (SocketAddr) are listening on TCP for Libp2p on same port?
-                    // Or we just try.
-                    
+                    // Harvest Connections: Dial random peers
                     let guard = state_discovery.read().await;
                     let tx = guard.signaling_tx.clone();
                     let webrtc_init = guard.webrtc.clone(); // Clone for initiate
                     drop(guard);
                     
-                    // Logic: If neighbor found, we initiate WebRTC Connection? 
-                    // Or just dial Libp2p?
-                    // Spec says: Libp2p used for Signaling. Then initiate WebRTC over Signaling.
-                    // This loop dials Libp2p first.
-                    
+                    // Loop dials Libp2p first to establish signaling channel
                     for peer in peers.iter().take(15) {
                          let ip = peer.ip();
                          let port = peer.port();
@@ -146,8 +131,7 @@ pub async fn start_client(_bootstrap_override: Option<String>) -> Result<(), Box
                          }
                     }
                     
-                    // Initiator Logic (Placeholder for future: once connected via Libp2p, who initiates WebRTC?)
-                    // For now, let's assume random initiation or based on PeerID comparison.
+                    // Future: Trigger WebRTC initiation logic here if needed
                 },
                 Err(e) => eprintln!("Discovery Error: {}", e),
             }

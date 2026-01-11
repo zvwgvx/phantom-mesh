@@ -145,13 +145,7 @@ impl RoutingTable {
         let _start_idx = if target_idx >= 256 { 255 } else { target_idx };
         
         // 2. Scan outward from target bucket
-        // We check start_idx, then start_idx +/- 1, etc.
-        // Actually, just iterating all buckets and collecting is okay for small node counts, 
-        // but for "Deep Tech" we should optimize.
-        // Since Vec<Vec<>> is small in-memory (256 vecs), simple iteration + sort is O(K*B log (KB)).
-        // With N < 1000, simple sort is fast enough and robust. 
-        // But for "Deep Technical", let's collect efficiently.
-        
+        // Scan all buckets for candidates
         for bucket in &self.buckets {
             candidates.extend(bucket.clone());
         }

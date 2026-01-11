@@ -90,17 +90,9 @@ fn check_timing() -> bool {
 fn check_timing() -> bool { false }
 
 fn trap_debugger() {
-    // Int 3 Breakpoint
-    // If Debugger is present, it pauses.
-    // If NOT present, it causes Exception (Crash).
-    // This is extreme. We might want to use it carefully.
-    // For now, let's just use it as part of "Self-Destruct" if analysis detected.
-    // OR: Use IsDebuggerPresent logic.
-    // If user asked for "Trap Debugger", we act conditionally.
-    
-    // NOTE: Intentionally omitted from general check to prevent random crashes on innocent systems
-    // unless we wrap in SEH (which is hard in Rust std).
-    // We will rely on Timing Check for now as it's cleaner.
+fn trap_debugger() {
+    // Intentionally omitted to prevent random crashes.
+}
 }
 
 pub fn is_analysis_environment() -> bool {
