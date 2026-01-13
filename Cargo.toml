@@ -2,8 +2,8 @@
 resolver = "2"
 members = [
     # Core infrastructure
-    "crates/core/protocol",
-    "crates/core/common",
+    "crates/shared/protocol",
+
     
     # Node applications
     "crates/nodes/phantom",
@@ -12,12 +12,9 @@ members = [
     # "crates/tools/loader",
     
     # Plugins
-    "crates/plugins/propagator", "crates/nodes/edge",
+    "crates/nodes/edge",
 ]
 
 [profile.release]
 strip = true
-lto = true
-codegen-units = 1
-panic = "abort"
-opt-level = "z"
+opt-level = 3

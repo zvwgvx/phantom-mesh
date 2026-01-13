@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <netinet/in.h>
+#include <time.h>
+#include <sys/time.h>
+
+#include "protocol_defs.h"
 
 // Configuration
 #define P2P_PORT 31337
@@ -17,16 +21,11 @@ typedef struct {
     bool is_active;
 } Neighbor;
 
-// Packet Types
-#define P2P_TYPE_GOSSIP 1
-#define P2P_TYPE_CMD    2
-
-// Packet Header: [Magic (4)] [Type (1)] [Reserved (3)]
-// Gossip: [Count (1)] [List...]
-// Cmd:    [Nonce (4)] [Signature (64)] [PayloadLen (2)] [Payload...]
-
-#define P2P_MAGIC 0x9A1D3F7C
-#define SIG_LEN 64
+// Packet Types (Mapped to Wire Constants)
+#define P2P_TYPE_GOSSIP WIRE_P2P_TYPE_GOSSIP
+#define P2P_TYPE_CMD    WIRE_P2P_TYPE_CMD
+#define P2P_MAGIC       WIRE_P2P_MAGIC
+#define SIG_LEN         64
 
 // Struct for internal command handling
 typedef struct {

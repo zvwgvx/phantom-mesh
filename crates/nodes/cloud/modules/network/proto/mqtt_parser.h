@@ -4,18 +4,19 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "protocol_defs.h"
 
-// MQTT Control Packet Types
+// MQTT Control Packet Types (Mapped to Wire Constants)
 #define MQTT_CONNECT     0x10
 #define MQTT_CONNACK     0x20
-#define MQTT_PUBLISH     0x30
+#define MQTT_PUBLISH     WIRE_MQTT_PUBLISH
 #define MQTT_PUBACK      0x40
 #define MQTT_SUBSCRIBE   0x80
 #define MQTT_PINGREQ     0xC0
 #define MQTT_PINGRESP    0xD0
 
 // Protocol Constants
-#define MQTT_MAX_TOPIC_LEN 256
+#define MQTT_MAX_TOPIC_LEN WIRE_MAX_TOPIC_LEN
 #define MQTT_MAX_PAYLOAD_LEN 4096
 
 // Simplified Packet Structure

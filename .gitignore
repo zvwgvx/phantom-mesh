@@ -2,6 +2,7 @@
 target/
 **/*.rs.bk
 
+xcompilers/
 # OS Generated
 .DS_Store
 .DS_Store?

