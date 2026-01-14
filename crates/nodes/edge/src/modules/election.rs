@@ -49,19 +49,36 @@ impl ElectionService {
         let rank = node_id % 1000; 
         
         // Use socket2 to set SO_REUSEPORT/ADDR
-        let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
-            .expect("Failed to create socket");
+        let socket = match Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("[Election] Failed to create socket: {}. Using fallback.", e);
+                // Fallback: Create basic socket without advanced options
+                Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
+                    .expect("Critical: Cannot create any UDP socket")
+            }
+        };
             
-        socket.set_reuse_address(true).expect("Failed to set reuse_address");
+        let _ = socket.set_reuse_address(true);
         #[cfg(not(target_os = "windows"))]
-        socket.set_reuse_port(true).expect("Failed to set reuse_port"); // Critical for local sim
-        socket.set_broadcast(true).expect("Failed to set broadcast");
+        let _ = socket.set_reuse_port(true);
+        let _ = socket.set_broadcast(true);
         
-        let addr: SocketAddr = format!("0.0.0.0:{}", DISCOVERY_PORT).parse().unwrap();
-        socket.bind(&addr.into()).expect("Failed to bind UDP discovery port");
-        socket.set_nonblocking(true).expect("Failed to set nonblocking");
+        let addr: SocketAddr = format!("0.0.0.0:{}", DISCOVERY_PORT).parse()
+            .unwrap_or_else(|_| "0.0.0.0:31338".parse().unwrap());
+        
+        if let Err(e) = socket.bind(&addr.into()) {
+            log::warn!("[Election] Failed to bind UDP port {}: {}. Discovery may not work.", DISCOVERY_PORT, e);
+        }
+        let _ = socket.set_nonblocking(true);
 
-        let socket = UdpSocket::from_std(socket.into()).expect("Failed to convert socket");
+        let socket = match UdpSocket::from_std(socket.into()) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("[Election] Failed to convert socket: {}. Creating new.", e);
+                UdpSocket::bind("0.0.0.0:0").await.expect("Critical: Cannot bind any UDP socket")
+            }
+        };
 
         Self {
             node_id,
@@ -81,7 +98,10 @@ impl ElectionService {
             node_id: self.node_id,
             rank: self.rank,
         };
-        let bytes = serde_json::to_vec(&packet).unwrap();
+        let bytes = match serde_json::to_vec(&packet) {
+            Ok(b) => b,
+            Err(e) => { log::error!("[Election] Serialize error: {}", e); return NodeRole::Unbound; }
+        };
         
         // Broadcast multiple times for reliability
         for _ in 0..3 {
@@ -129,7 +149,10 @@ impl ElectionService {
             node_id: self.node_id,
             rank: self.rank,
         };
-        let bytes = serde_json::to_vec(&win_packet).unwrap();
+        let bytes = match serde_json::to_vec(&win_packet) {
+            Ok(b) => b,
+            Err(_) => return NodeRole::Leader,
+        };
         let _ = self.socket.send_to(&bytes, BROADCAST_ADDR).await;
 
         NodeRole::Leader
@@ -152,8 +175,9 @@ impl ElectionService {
                                 node_id: self.node_id,
                                 rank: self.rank,
                             };
-                            let bytes = serde_json::to_vec(&resp).unwrap();
-                            let _ = self.socket.send_to(&bytes, addr).await;
+                            if let Ok(bytes) = serde_json::to_vec(&resp) {
+                                let _ = self.socket.send_to(&bytes, addr).await;
+                            }
                         }
                         
                         // Conflict Resolution (Higher Rank Wins)

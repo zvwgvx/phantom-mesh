@@ -32,7 +32,7 @@ void proxy_handle_new_conn(int listener_sock);
 
 /**
  * Broadcasts a payload to all active subscribers via Fake MQTT PUBLISH.
- * Encapsulates the payload in a valid V3 packet.
+ * Encapsulates the payload in a valid packet.
  */
 void proxy_broadcast(const uint8_t *payload, size_t len);
 

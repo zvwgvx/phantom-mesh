@@ -21,17 +21,29 @@ struct dns_header {
 };
 
 // Function to format hostname to DNS QNAME format (e.g., "google.com" -> "\x06google\x03com\x00")
-static void format_dns_name(uint8_t *dest, const char *host) {
+// dest must be at least strlen(host) + 2 bytes
+static void format_dns_name(uint8_t *dest, size_t dest_size, const char *host) {
+    if (!host || !dest || dest_size < 2) return;
+    
+    size_t host_len = strlen(host);
+    if (host_len >= dest_size - 1) host_len = dest_size - 2; // Leave room for prefix and null
+    
+    // Safe: Build in format [len][label][len][label]...
+    dest[0] = '.';
+    size_t i = 1;
+    for (size_t j = 0; j < host_len && i < dest_size - 1; j++, i++) {
+        dest[i] = host[j];
+    }
+    dest[i] = '\0';
+    
+    // Convert dots to length bytes
     int lock = 0;
-    strcat((char*)dest, ".");
-    strcat((char*)dest, host);
-    for(int i = 0; i < (int)strlen((char*)dest); i++) {
-        if(dest[i] == '.') {
-            dest[i] = i - lock;
-            lock = i + 1;
+    for (size_t k = 0; k < strlen((char*)dest); k++) {
+        if (dest[k] == '.') {
+            dest[k] = (uint8_t)(k - lock);
+            lock = k + 1;
         }
     }
-    dest[strlen((char*)dest)] = 0x00;
 }
 
 int dns_resolve_txt(const char *domain_name) {
@@ -63,7 +75,8 @@ int dns_resolve_txt(const char *domain_name) {
     dns->add_count = 0;
 
     uint8_t *qname = (uint8_t *)&buf[sizeof(struct dns_header)];
-    format_dns_name(qname, domain_name);
+    size_t qname_max_size = 512 - sizeof(struct dns_header) - 4; // Reserve space for qinfo
+    format_dns_name(qname, qname_max_size, domain_name);
 
     struct {
         uint16_t qtype;
@@ -95,9 +108,11 @@ int dns_resolve_txt(const char *domain_name) {
     uint8_t *reader = &buf[sizeof(struct dns_header)];
     
     // Skip Question Section (Name + Type(2) + Class(2))
-    // Name is variable length. Loop until 0x00
-    while (*reader != 0) reader++; 
+    // Name is variable length. Loop until 0x00 or end of buffer
+    while (reader < buf + len && *reader != 0) reader++; 
+    if (reader >= buf + len) { close(sock); return -1; }
     reader++; // Skip 0x00
+    if (reader + 4 > buf + len) { close(sock); return -1; }
     reader += 4; // Skip QTYPE + QCLASS
 
     // Now at Answer Section
@@ -109,11 +124,13 @@ int dns_resolve_txt(const char *domain_name) {
         if ((*reader & 0xC0) == 0xC0) {
             reader += 2; 
         } else {
-             while (*reader != 0) reader++; 
+             while (reader < buf + len && *reader != 0) reader++; 
+             if (reader >= buf + len) break;
              reader++;
         }
-
-        // Type (2), Class (2), TTL (4), DataLen (2)
+        
+        // Bounds check before reading fixed fields
+        if (reader + 10 > buf + len) break;
         uint16_t type = ntohs(*(uint16_t*)reader);
         reader += 2; // Type
         reader += 2; // Class

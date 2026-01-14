@@ -39,10 +39,16 @@ fn load_master_key(path: &PathBuf) -> SigningKey {
                 let secret: SecretKey = array;
                 SigningKey::from(secret)
             } else {
-                 panic!("Invalid Key File Length");
+                eprintln!("ERROR: Invalid key file length at {:?}. Expected 32 or 64 bytes, got {}.", path, bytes.len());
+                eprintln!("Generate key with: openssl rand 32 > {}", path.display());
+                std::process::exit(1);
             }
         }
-        Err(e) => panic!("Could not load Master Key at {:?}: {}", path, e),
+        Err(e) => {
+            eprintln!("ERROR: Could not load Master Key at {:?}: {}", path, e);
+            eprintln!("Create key file with: openssl rand 32 > {}", path.display());
+            std::process::exit(1);
+        }
     }
 }
 

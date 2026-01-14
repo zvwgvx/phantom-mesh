@@ -126,7 +126,7 @@ impl server::Handler for PhantomSession {
                        session.data(channel, CryptoVec::from_slice(format!("[*] Broadcasting '{}' to Sepolia...\r\n", ip_port).as_bytes()));
                        
                        // Read ETH Key from keys directory
-                       let eth_key_path = self.keys_dir.join("phantom_eth.key");
+                       let eth_key_path = self.keys_dir.join("eth.key");
                        let mut eth_key = std::fs::read_to_string(&eth_key_path)
                            .unwrap_or_default()
                            .trim()

@@ -35,7 +35,7 @@ impl PolyMqttClient {
         Ok(())
     }
 
-    /// V3: Persistent Connection Manager
+    /// Persistent Connection Manager
     /// Spawns a background task that manages the TCP connection.
     /// - reads from `msg_rx` channel -> Encrypt -> Send to Cloud
     /// - reads from Cloud -> Decrypt/Parse -> Send to `cmd_tx` channel
@@ -54,8 +54,7 @@ impl PolyMqttClient {
                     
                     let (mut reader, mut writer) = stream.split();
                     
-                    // Handshake? (Optional V3 Init)
-                    // if let Err(e) = self.write_packet(&mut writer, b"HELLO_V3").await { ... }
+                    // Handshake? (Optional Init)
 
                     loop { // Data Loop
                         tokio::select! {
@@ -115,8 +114,6 @@ impl PolyMqttClient {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
         writer.write_all(&packet).await?;
-
-        writer.write_all(&packet).await?;
         writer.flush().await?;
         Ok(())
     }
@@ -129,7 +126,7 @@ impl PolyMqttClient {
     where R: AsyncReadExt + Unpin
     {
         // 1. Read Fixed Header + Length to know how much to buffer
-        // For simplicity/robustness in V3, we might need a better framing reader.
+        // For simplicity/robustness, we might need a better framing reader.
         // But MqttPacket::parse takes a buffer.
         // We act as a "Byte Stream" to "Packet" decoder here.
         

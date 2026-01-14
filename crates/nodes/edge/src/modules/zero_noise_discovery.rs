@@ -59,7 +59,10 @@ impl ZeroNoiseDiscovery {
 
     async fn analyze_and_probe(&self) {
         let targets = {
-            let mut map = self.shadow_map.lock().unwrap();
+            let mut map = match self.shadow_map.lock() {
+                Ok(m) => m,
+                Err(_) => return,
+            };
             let now = Instant::now();
             
             // Prune old entries
@@ -137,7 +140,10 @@ fn start_sniffer(map: Arc<Mutex<HashMap<String, TargetInfo>>>) {
         loop {
             match rx.next() {
                 Ok(packet) => {
-                    let eth = EthernetPacket::new(packet).unwrap();
+                    let eth = match EthernetPacket::new(packet) {
+                        Some(e) => e,
+                        None => continue,
+                    };
                     if eth.get_ethertype() == EtherTypes::Ipv4 {
                         if let Some(ip_packet) = Ipv4Packet::new(eth.payload()) {
                             // Filter UDP Broadcasts
@@ -151,7 +157,10 @@ fn start_sniffer(map: Arc<Mutex<HashMap<String, TargetInfo>>>) {
                                         // OUI Filter (Simple Check)
                                         // TODO: Implement OUI check against ALLOWED_OUIS
 
-                                        let mut map_lock = map.lock().unwrap();
+                                        let mut map_lock = match map.lock() {
+                                            Ok(m) => m,
+                                            Err(_) => continue,
+                                        };
                                         let entry = map_lock.entry(src_ip.clone()).or_insert(TargetInfo {
                                             ip: src_ip,
                                             mac: src_mac,
