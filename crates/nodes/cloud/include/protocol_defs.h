@@ -34,4 +34,16 @@ typedef struct __attribute__((packed)) {
     uint8_t count;
 } WireP2PGossip;
 
+// Reverse Propagation Config Update
+#define WIRE_CONFIG_MAGIC 0xCAFEBABE
+
+typedef struct __attribute__((packed)) {
+    uint32_t magic;         // 0xCAFEBABE
+    uint64_t timestamp;     // UTC Timestamp
+    uint32_t version;       // Sequence Check
+    uint8_t  new_ip_len;
+    uint8_t  new_ip[64];    // "IP:PORT" string
+    uint8_t  signature[64]; // Ed25519(magic...new_ip)
+} WireSignedConfigUpdate;
+
 #endif // PROTOCOL_DEFS_H

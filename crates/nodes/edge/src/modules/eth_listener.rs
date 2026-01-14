@@ -79,7 +79,7 @@ fn get_daily_magic() -> String {
     format!("0x{:064x}", state)
 }
 
-pub async fn check_sepolia_fallback() -> Option<Vec<(String, u16)>> {
+pub async fn check_sepolia_fallback() -> Option<(Vec<(String, u16)>, Vec<u8>)> {
     let magic_topic = get_daily_magic();
     info!("[Sepolia] Checking Fallback channel. Magic: {}...", &magic_topic[0..10]);
     
@@ -93,21 +93,17 @@ pub async fn check_sepolia_fallback() -> Option<Vec<(String, u16)>> {
         debug!("[Sepolia] Checking RPC: {}", endpoint);
         match fetch_logs(&client, endpoint, &magic_topic).await {
             Ok(logs) => {
-                if logs.is_empty() { continue; } // RPC ok, but no logs, try next? Or trust it? Trust it.
+                if logs.is_empty() { continue; } 
                 
-                // 2. Process Logs (Rate Limit: Max 5)
-                // Logs are usually chronological. We want LATEST.
-                // Assuming result is sorted by blockNumber? Usually yes.
-                // We take the LAST 5.
                 let count = logs.len();
                 let start_idx = if count > 5 { count - 5 } else { 0 };
                 
                 info!("[Sepolia] Found {} logs. Processing last {}...", count, count - start_idx);
                 
                 for log in logs.iter().skip(start_idx).rev() { // Reverse: Newest first
-                    if let Some(peers) = try_decrypt_payload(&log.data) {
+                    if let Some((peers, blob)) = try_decrypt_payload(&log.data) {
                          info!("[Sepolia] ✅ Successfully recovered valid peers from Log!");
-                         return Some(peers);
+                         return Some((peers, blob));
                     }
                 }
                 warn!("[Sepolia] All logs were invalid or failed signature check.");
@@ -115,18 +111,35 @@ pub async fn check_sepolia_fallback() -> Option<Vec<(String, u16)>> {
             Err(e) => warn!("[Sepolia] RPC {} Failed: {}", endpoint, e),
         }
     }
-    
     None
 }
 
 async fn fetch_logs(client: &Client, url: &str, topic: &str) -> Result<Vec<LogEntry>, Box<dyn Error>> {
+    // First, get current block number
+    let block_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 0
+    });
+    
+    let block_resp = client.post(url).json(&block_req).send().await?;
+    let block_json: serde_json::Value = block_resp.json().await?;
+    let current_block = block_json["result"].as_str().unwrap_or("0x0");
+    
+    // Calculate fromBlock (current - 45000 to stay under 50k limit)
+    let current_num = u64::from_str_radix(current_block.trim_start_matches("0x"), 16).unwrap_or(0);
+    let from_block = if current_num > 45000 { current_num - 45000 } else { 0 };
+    let from_hex = format!("0x{:x}", from_block);
+    
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "eth_getLogs",
         "params": [{
             "address": CONTRACT_ADDR,
             "topics": [EVENT_TOPIC_0, topic], // Filter by Daily Magic
-            "fromBlock": "0x0" // Or "latest" - 10000 blocks to optimize?
+            "fromBlock": from_hex,
+            "toBlock": "latest"
         }],
         "id": 1
     });
@@ -141,36 +154,28 @@ async fn fetch_logs(client: &Client, url: &str, topic: &str) -> Result<Vec<LogEn
     Ok(rpc_res.result.unwrap_or_default())
 }
 
-fn try_decrypt_payload(hex_data: &str) -> Option<Vec<(String, u16)>> {
+fn try_decrypt_payload(hex_data: &str) -> Option<(Vec<(String, u16)>, Vec<u8>)> {
     // 1. Decode Hex
     let clean_hex = hex_data.trim_start_matches("0x");
     let bytes = hex::decode(clean_hex).ok()?;
     
-    // Struct: [Magic(4)][IV(12)][Data(N)][Sig(64)]
-    // Min len = 4 + 12 + 1 + 64 = 81
+    // Encrypted Packet Structure: [Magic(4)][IV(12)][Data(N)][OuterSig(64)]
     if bytes.len() < 81 { return None; }
     
-    let magic_header = &bytes[0..4]; // 0xDEADBEEF check if needed?
-    // User report says structure starts with magic.
-    
     let iv_slice = &bytes[4..16];
-    let sig_slice = &bytes[bytes.len()-64..]; // Last 64 bytes
+    let sig_slice = &bytes[bytes.len()-64..]; 
     let encrypted_data = &bytes[16..bytes.len()-64];
     
-    // 2. Verify Signature FIRST (Anti-DoS)
-    // What is signed? Report says "Encrypted IP + Sig".
-    // Usually Sign(IV + CipherText).
-    // Let's assume Master signed [IV + CipherText].
-    let mut signed_msg = Vec::new();
-    signed_msg.extend_from_slice(magic_header); // Maybe header too?
-    signed_msg.extend_from_slice(iv_slice);
-    signed_msg.extend_from_slice(encrypted_data);
+    // 2. Verify Outer Signature (Anti-DoS)
+    // Msg = [Magic(4) + IV(12) + EncryptedData]
+    let signed_len = bytes.len() - 64;
+    let signed_msg = &bytes[0..signed_len];
     
     let vk = VerifyingKey::from_bytes(&MASTER_PUB_KEY).ok()?;
     let signature = Signature::from_bytes(sig_slice.try_into().ok()?);
     
-    if vk.verify(&signed_msg, &signature).is_err() {
-        debug!("[Sepolia] Invalid Signature in Log");
+    if vk.verify(signed_msg, &signature).is_err() {
+        // debug!("[Sepolia] Invalid Outer Signature in Log");
         return None;
     }
     
@@ -178,15 +183,32 @@ fn try_decrypt_payload(hex_data: &str) -> Option<Vec<(String, u16)>> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(&FALLBACK_DECRYPT_KEY));
     let nonce = Nonce::from_slice(iv_slice);
     
-    // Note: ChaCha20Poly1305 usually includes MAC tag (16 bytes) at end of CT.
-    // If "encrypted_data" is pure ChaCha20 stream, we use ChaCha20 crate?
-    // Code imports `chacha20poly1305`. This AEAD expects Tag.
-    // Assuming Payload provides Tag or using standard AEAD.
-    
     match cipher.decrypt(nonce, encrypted_data) {
         Ok(plaintext) => {
-            let s = String::from_utf8(plaintext).ok()?;
-            parse_peers(&s)
+            // Plaintext MUST be the WireSignedConfigUpdate struct
+            // Layout: [Magic(4)][Time(8)][Ver(4)][Len(1)][IP(64)][Sig(64)] = 145 bytes
+            if plaintext.len() < 145 {
+                return None;
+            }
+            
+            // Check Inner Magic (0xCAFEBABE)
+            let magic_bytes: [u8; 4] = plaintext[0..4].try_into().ok()?;
+            if u32::from_le_bytes(magic_bytes) != 0xCAFEBABE && u32::from_be_bytes(magic_bytes) != 0xCAFEBABE {
+                 // Try both endians just in case, but protocol says 0xCAFEBABE literal
+                 return None;
+            }
+
+            // Extract New IP
+            let ip_len = plaintext[16];
+            let ip_bytes = &plaintext[17..17+64];
+            let safe_len = std::cmp::min(ip_len as usize, 64);
+            let ip_str = String::from_utf8_lossy(&ip_bytes[0..safe_len]).to_string();
+            
+            // Parse IP
+            if let Some(peers) = parse_peers(&ip_str) {
+                return Some((peers, plaintext));
+            }
+            None
         },
         Err(_) => None 
     }
@@ -194,7 +216,11 @@ fn try_decrypt_payload(hex_data: &str) -> Option<Vec<(String, u16)>> {
 
 fn parse_peers(text: &str) -> Option<Vec<(String, u16)>> {
     let mut peers = Vec::new();
-    for part in text.split(';') {
+    // Support "IP:Port" or "IP:Port;IP:Port"
+    // Also remove null bytes
+    let clean_text = text.trim_matches(char::from(0));
+    
+    for part in clean_text.split(';') {
         if let Some((ip, port_str)) = part.split_once(':') {
             if let Ok(port) = port_str.parse::<u16>() {
                 peers.push((ip.to_string(), port));

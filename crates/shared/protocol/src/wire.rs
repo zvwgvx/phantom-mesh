@@ -39,3 +39,17 @@ pub struct WireP2PGossip {
     pub type_: u8,
     pub count: u8,
 }
+
+#[repr(C, packed)]
+pub struct WireSignedConfigUpdate {
+    pub magic: u32,       // 0xCAFEBABE
+    pub timestamp: u64,   // UTC Timestamp
+    pub version: u32,     // Sequence
+    pub new_ip_len: u8,
+    pub new_ip: [u8; 64],
+    pub signature: [u8; 64],
+}
+
+impl WireConstants {
+    pub const CONFIG_MAGIC: u32 = 0xCAFEBABE;
+}

