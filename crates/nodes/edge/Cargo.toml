@@ -17,7 +17,22 @@ ed25519-dalek = { version = "2.0", features = ["rand_core"] }
 hex = "0.4"
 socket2 = "0.5"
 async-trait = "0.1"
+pnet = "0.34"
+# Windows API for Named Pipes
+
+
 
 # Internal Crate Dependencies
 
+
 protocol = { path = "../../shared/protocol" }
+
+# Windows API for Named Pipes
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.48", features = [
+    "Win32_System_Pipes",
+    "Win32_Security", 
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO"
+] }

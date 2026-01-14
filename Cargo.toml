@@ -9,7 +9,7 @@ members = [
     "crates/nodes/phantom",
     
     # Standalone tools
-    # "crates/tools/loader",
+    "crates/tools/dns_signer",
     
     # Plugins
     "crates/nodes/edge",

@@ -1,6 +1,6 @@
 use reqwest::Client;
 use std::error::Error;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
 use log::{info, debug, warn, error};
 use base64::{Engine as _, engine::general_purpose};
@@ -90,16 +90,153 @@ impl BootstrapProvider for DohProvider {
     fn name(&self) -> String {
         format!("DoH({} @ {})", self.domain, self.resolver_url)
     }
+    fn name(&self) -> String {
+        format!("DoH({} @ {})", self.domain, self.resolver_url)
+    }
+}
+
+/// DGA Provider (Time-based Domain Generation)
+pub struct DgaProvider {
+    pub resolver_url: String,
+}
+
+impl DgaProvider {
+    fn generate_domain(&self) -> String {
+        let start = SystemTime::now();
+        let since_the_epoch = start.duration_since(UNIX_EPOCH).expect("Time went backwards");
+        let seconds = since_the_epoch.as_secs();
+        let day_slot = seconds / 86400;
+        
+        // Simple LCG/Hash compatible with Phantom/Cloud
+        let seed: u64 = 0xCAFEBABE;
+        let mut state = day_slot ^ seed;
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        
+        format!("phantom-{:x}.com", state & 0xFFFFFF)
+    }
+}
+
+#[async_trait::async_trait]
+impl BootstrapProvider for DgaProvider {
+    async fn fetch_payload(&self, client: &Client) -> Result<String, Box<dyn Error + Send + Sync>> {
+        let domain = self.generate_domain();
+        debug!("[Bootstrap] DGA Generated: {}", domain);
+        
+        let url = format!("{}?name={}&type=TXT", self.resolver_url, domain);
+        let resp = client.get(&url).send().await?.json::<DohResponse>().await?;
+
+        if let Some(answers) = resp.answer {
+            for answer in answers {
+                let raw_txt = answer.data.trim_matches('"').replace("\\\"", "\"");
+                if raw_txt.contains("SIG:") {
+                    return Ok(raw_txt);
+                }
+            }
+        }
+        Err(format!("No signed TXT record found for DGA {}", domain).into())
+    }
+
+    fn name(&self) -> String {
+        format!("DoH-DGA(Today @ {})", self.resolver_url)
+    }
 }
 
 
 // --- REVISED STRUCT DEFINITION & IMPL ---
 
+// --- REVISED STRUCT DEFINITION & IMPL ---
+
 pub struct ProfessionalBootstrapper {
-    providers: Vec<Arc<dyn BootstrapProvider>>,
+    primary_providers: Vec<Arc<dyn BootstrapProvider>>, // Tier 1: dht.polydevs.uk
+    fallback_providers: Vec<Arc<dyn BootstrapProvider>>, // Tier 2: DGA
     client: Client,
 }
 
+        let ua = user_agents[rand::thread_rng().gen_range(0..user_agents.len())];
+        
+        // Default Configuration
+        let mut bs = Self {
+            primary_providers: Vec::new(),
+            fallback_providers: Vec::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(CONNECT_TIMEOUT_SEC))
+                .user_agent(ua)
+                .build()
+                .unwrap(),
+        };
+
+        // 1. Primary: dht.polydevs.uk
+        bs.primary_providers.push(Arc::new(DohProvider {
+            domain: "dht.polydevs.uk".to_string(),
+            resolver_url: "https://dns.google/resolve".to_string(),
+        }));
+
+        // 2. Secondary: DGA
+        bs.fallback_providers.push(Arc::new(DgaProvider {
+            resolver_url: "https://dns.google/resolve".to_string(),
+        }));
+        
+        bs
+    }
+    
+    // Legacy helper (adds to primary)
+    pub fn add_provider(&mut self, provider: Arc<dyn BootstrapProvider>) {
+        self.primary_providers.push(provider);
+    }
+    
+    async fn race_tier(&self, tier: &[Arc<dyn BootstrapProvider>]) -> Option<Vec<(String, u16)>> {
+        if tier.is_empty() { return None; }
+        
+        let mut set = JoinSet::new();
+        for provider in tier {
+             let p = provider.clone();
+             let c = self.client.clone();
+             set.spawn(async move {
+                 // Jitter: Sleep 0-2s to avoid simultaneous packets
+                 let jitter = rand::thread_rng().gen_range(0..2000);
+                 tokio::time::sleep(Duration::from_millis(jitter)).await;
+                 match p.fetch_payload(&c).await {
+                    Ok(payload) => verify_signature(&payload).map(|ips| (p.name(), ips)),
+                    Err(e) => Err(e),
+                 }
+             });
+        }
+        
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(Ok((source_name, peers))) => {
+                    info!("[Bootstrap] SUCCESS via {}. Found {} peers.", source_name, peers.len());
+                    set.abort_all();
+                    return Some(peers);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    pub async fn resolve(&self) -> Option<Vec<(String, u16)>> {
+        info!("[Bootstrap] Starting Tiered Resolution.");
+        
+        // Tier 1: Primary
+        info!("[Bootstrap] Attempting Tier 1 (Home)...");
+        if let Some(nodes) = self.race_tier(&self.primary_providers).await {
+            return Some(nodes);
+        }
+
+        // Tier 2: Fallback
+        info!("[Bootstrap] Tier 1 Failed. Attempting Tier 2 (DGA)...");
+        if let Some(nodes) = self.race_tier(&self.fallback_providers).await {
+            return Some(nodes);
+        }
+
+        warn!("[Bootstrap] All Tiers Failed.");
+        None
+    }
+}
+/*
 impl ProfessionalBootstrapper {
     pub fn new() -> Self {
         let user_agents = vec![
@@ -172,6 +309,7 @@ impl ProfessionalBootstrapper {
         None
     }
 }
+*/
 
 // --- HELPER FUNCTIONS ---
 
