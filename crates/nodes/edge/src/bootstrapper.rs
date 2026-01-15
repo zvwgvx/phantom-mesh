@@ -2,14 +2,14 @@ use reqwest::Client;
 use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::sync::Arc;
-use log::{info, debug, warn, error};
+use log::{info, debug, warn};
 use base64::{Engine as _, engine::general_purpose};
 use ed25519_dalek::{Verifier, VerifyingKey, Signature};
 use rand::Rng;
 use serde::Deserialize;
 use tokio::task::JoinSet;
 
-// --- CONFIGURATION ---
+
 const CONNECT_TIMEOUT_SEC: u64 = 15;
 
 const MASTER_PUB_KEY: [u8; 32] = [
@@ -19,7 +19,7 @@ const MASTER_PUB_KEY: [u8; 32] = [
     0xe7, 0x38, 0x99, 0xcc, 0x79, 0x3d, 0xb8, 0x6a
 ];
 
-// --- TRAITS ---
+
 
 #[async_trait::async_trait]
 pub trait BootstrapProvider: Send + Sync {
@@ -27,7 +27,7 @@ pub trait BootstrapProvider: Send + Sync {
     fn name(&self) -> String;
 }
 
-// --- PROVIDERS ---
+
 
 pub struct HttpProvider {
     pub url: String,
@@ -134,8 +134,6 @@ impl BootstrapProvider for DgaProvider {
     }
 }
 
-
-// --- REVISED STRUCT DEFINITION & IMPL ---
 
 /// Blockchain Fallback Provider (Sepolia)
 pub struct EthProvider;
@@ -254,8 +252,6 @@ impl ProfessionalBootstrapper {
         None
     }
 }
-
-// --- HELPER FUNCTIONS ---
 
 fn verify_signature(text: &str) -> Result<Vec<(String, u16)>, Box<dyn Error + Send + Sync>> {
     let text = text.trim();

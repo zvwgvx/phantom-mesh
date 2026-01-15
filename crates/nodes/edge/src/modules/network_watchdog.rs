@@ -2,10 +2,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
-use log::{info, warn, error};
+use log::{info, warn};
 
 use crate::modules::eth_listener;
-use crate::bootstrapper;
 
 const NETWORK_DEAD_THRESHOLD_SECS: u64 = 300;
 
@@ -46,7 +45,7 @@ impl NetworkWatchdog {
 }
 
 pub async fn run_fallback_monitor(watchdog: Arc<NetworkWatchdog>) {
-    info!("[Watchdog] Network Health Monitor Started. Threshold: {}s", NETWORK_DEAD_THRESHOLD_SECS);
+    info!("watchdog: {}s threshold", NETWORK_DEAD_THRESHOLD_SECS);
     
     let mut in_fallback_mode = false;
     
@@ -55,36 +54,36 @@ pub async fn run_fallback_monitor(watchdog: Arc<NetworkWatchdog>) {
         
         if watchdog.is_dead() {
             if !in_fallback_mode {
-                warn!("[Watchdog] Network DEAD for {}s. Activating Blockchain Fallback...", 
+                warn!("watchdog: dead {}s, fallback", 
                       watchdog.seconds_since_contact());
                 in_fallback_mode = true;
             }
             
             // Poll Sepolia
-            info!("[Watchdog] Polling Sepolia for recovery signal...");
+            info!("fallback: poll");
             if let Some((peers, blob)) = eth_listener::check_sepolia_fallback().await {
-                info!("[Watchdog] Recovered {} peers from Blockchain", peers.len());
+                info!("fallback: {} peers", peers.len());
                 
                 // 1. Attempt reconnection
                 for (ip, port) in &peers {
-                    info!("[Watchdog] Recovery Peer: {}:{}", ip, port);
+                    info!("peer: {}:{}", ip, port);
                     watchdog.mark_alive();
                 }
                 
                 // 2. Reverse Propagation (Inject into Local Mesh)
-                info!("[Watchdog] Injecting Reverse Propagation Packet ({} bytes) into Local Mesh", blob.len());
+                info!("propagate: {} bytes", blob.len());
                 propagate_to_mesh(&blob).await;
                 
                 in_fallback_mode = false;
             } else {
-                warn!("[Watchdog] No valid signal on Sepolia. Retrying in {}s...", FALLBACK_POLL_INTERVAL_SECS);
+                warn!("fallback: retry {}s", FALLBACK_POLL_INTERVAL_SECS);
             }
             
             // Wait before next poll
             sleep(Duration::from_secs(FALLBACK_POLL_INTERVAL_SECS)).await;
         } else {
             if in_fallback_mode {
-                info!("[Watchdog] Network Recovered. Exiting Fallback Mode.");
+                info!("watchdog: recovered");
                 in_fallback_mode = false;
             }
         }

@@ -6,9 +6,7 @@
 #include <netinet/in.h>
 
 // Config
-#define PROXY_LISTEN_PORT 1883 // MQTT
-#define MASTER_IP "1.2.3.4"   // Placeholder
-#define MASTER_PORT 443
+#define PROXY_LISTEN_PORT 1883
 #define MAX_SUBSCRIBERS 5
 
 typedef struct {

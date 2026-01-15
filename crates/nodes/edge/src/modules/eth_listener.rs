@@ -2,8 +2,7 @@ use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use log::{info, warn, debug, error};
-use base64::{Engine as _, engine::general_purpose};
+use log::{info, warn, debug};
 use ed25519_dalek::{Verifier, VerifyingKey, Signature};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce}; // Removed Aead from root
 use chacha20poly1305::aead::{Aead, KeyInit}; // Import Aead trait here

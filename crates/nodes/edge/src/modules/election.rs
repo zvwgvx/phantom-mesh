@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
 use rand::Rng;
-use log::{info, debug};
+use log::info;
 
 const DISCOVERY_PORT: u16 = 31338;
 const DISCOVERY_MAGIC: u32 = 0xDEAD0001;

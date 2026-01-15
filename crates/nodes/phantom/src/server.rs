@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use russh::{server, Channel, ChannelId, CryptoVec};
 use russh_keys::key;
-use log::{info, error};
+use log::info;
 use crate::p2p::P2PService;
 
 // Shared State for the C2

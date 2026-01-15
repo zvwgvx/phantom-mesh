@@ -1,9 +1,8 @@
 use tokio::net::{UnixListener, UnixStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::error::Error;
-use log::{info, error};
+use log::info;
 use std::os::unix::fs::PermissionsExt;
-use std::mem::size_of;
 
 // On Windows this would be Named Pipe. On Mac/Linux, UDS.
 const SOCK_PATH: &str = "/tmp/phantom_edge.sock";

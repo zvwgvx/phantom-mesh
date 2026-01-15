@@ -1,7 +1,6 @@
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
-use std::sync::Arc;
-use log::{info, error, debug, warn};
+use log::{info, error, debug};
 use crate::modules::local_comm::{LocalTransport, LipcMsgType};
 
 pub struct BridgeService {

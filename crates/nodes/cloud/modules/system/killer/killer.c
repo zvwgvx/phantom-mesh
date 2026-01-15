@@ -73,8 +73,7 @@ const char *whitelisted[] = {
     "/root/dvr_gui/",
     "/root/dvr_app/",
     "/anko-app/",
-    "/opt/",
-    "mirai_lite" // Add ourselves just in case
+    "/opt/"
 };
 
 const char *blacklisted[] = {

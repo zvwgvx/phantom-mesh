@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use ethers::prelude::*;
-use ethers::core::types::transaction::eip2718::TypedTransaction;
 use ethers::signers::{LocalWallet, Signer};
-use log::{info, warn, error};
+use log::{info, error};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // --- CONFIGURATION ---

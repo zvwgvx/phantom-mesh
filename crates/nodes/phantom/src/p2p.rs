@@ -3,12 +3,12 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
-use log::{info, warn, error, debug};
-use ed25519_dalek::{SigningKey, Signer};
+use log::{info, error};
+use ed25519_dalek::SigningKey;
 use rand::Rng;
 
-use protocol::wire::{WireConstants, WireP2PGossip, WireP2PHeader};
-use protocol::p2p::{P2PCommand, P2PMessage, P2P_MAGIC, P2P_TYPE_GOSSIP};
+use protocol::wire::WireConstants;
+use protocol::p2p::{P2PCommand, P2PMessage};
 
 const P2P_PORT: u16 = 31338; // Phantom uses diff port to run on same machine as Cloud? Or same?
 // If same machine, use 31338.

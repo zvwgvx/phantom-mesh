@@ -1,6 +1,6 @@
 use byteorder::{BigEndian, WriteBytesExt};
-use ed25519_dalek::{Signer, Verifier, Signature, SigningKey, VerifyingKey};
-use std::io::{self, Write};
+use ed25519_dalek::{Signer, SigningKey};
+use std::io::Write;
 
 pub const P2P_MAGIC: u32 = 0x9A1D3F7C;
 pub const P2P_TYPE_GOSSIP: u8 = 1;
