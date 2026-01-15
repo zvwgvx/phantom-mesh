@@ -18,28 +18,15 @@ impl MqttPacket {
         }
     }
 
-    /// Serialize to Fake MQTT Wire Format (PUBLISH QoS 0)
     pub fn to_bytes(&self) -> io::Result<Vec<u8>> {
         let mut buf = Vec::new();
         let topic_bytes = self.topic.as_bytes();
-        let payload_len = self.payload.len();
+        let remaining_len = 2 + topic_bytes.len() + self.payload.len();
         
-        // 1. Remaining Length = TopicLen(2) + Topic + Payload
-        let remaining_len = 2 + topic_bytes.len() + payload_len;
-        
-        // 2. Fixed Header (PUBLISH | QoS 0)
         buf.write_u8(MQTT_PUBLISH)?;
-        
-        // 3. Variable Length Encoding
         encode_var_length(remaining_len, &mut buf)?;
-        
-        // 4. Topic Length (MSB LSB)
         buf.write_u16::<BigEndian>(topic_bytes.len() as u16)?;
-        
-        // 5. Topic
         buf.write_all(topic_bytes)?;
-        
-        // 6. Payload
         buf.write_all(&self.payload)?;
         
         Ok(buf)
@@ -48,19 +35,14 @@ impl MqttPacket {
     pub fn parse(buffer: &[u8]) -> io::Result<Self> {
         let mut rdr = Cursor::new(buffer);
         
-        // 1. Fixed Header
         let header = rdr.read_u8()?;
         if (header & 0xF0) != 0x30 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid MQTT Header"));
         }
         
-        // 2. Remaining Length
         let _len = decode_var_length(&mut rdr)?;
-        
-        // 3. Topic Length
         let topic_len = rdr.read_u16::<BigEndian>()? as usize;
         
-        // 4. Topic
         if topic_len > MAX_TOPIC_LEN {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Topic too long"));
         }
@@ -69,7 +51,6 @@ impl MqttPacket {
         let topic = String::from_utf8(topic_buf)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8 Topic"))?;
             
-        // 5. Payload
         let mut payload = Vec::new();
         rdr.read_to_end(&mut payload)?;
         

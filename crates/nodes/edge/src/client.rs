@@ -23,11 +23,10 @@ impl PolyMqttClient {
         Self {
             iot_ip: iot_ip.to_string(),
             iot_port,
-            master_key: *Key::from_slice(key_bytes),
+            master_key: *Key::from_slice(key_bytes), // chacha key
         }
     }
 
-    /// Legacy ephemeral send (for compatibility, but should be phased out)
     pub async fn send_secure_payload(&self, data: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
         let addr = format!("{}:{}", self.iot_ip, self.iot_port);
         let mut stream = TcpStream::connect(&addr).await?;
@@ -35,10 +34,6 @@ impl PolyMqttClient {
         Ok(())
     }
 
-    /// Persistent Connection Manager
-    /// Spawns a background task that manages the TCP connection.
-    /// - reads from `msg_rx` channel -> Encrypt -> Send to Cloud
-    /// - reads from Cloud -> Decrypt/Parse -> Send to `cmd_tx` channel
     pub async fn start_persistent_loop(
         &self, 
         mut msg_rx: mpsc::Receiver<Vec<u8>>,
@@ -47,14 +42,14 @@ impl PolyMqttClient {
         let addr = format!("{}:{}", self.iot_ip, self.iot_port);
         info!("[PolyClient] Starting Persistent Loop for {}", addr);
 
-        loop { // Reconnection Loop
+        loop { // reconnect
             match TcpStream::connect(&addr).await {
                 Ok(mut stream) => {
                     info!("[PolyClient] Connected to Cloud.");
                     
                     let (mut reader, mut writer) = stream.split();
                     
-                    // Handshake? (Optional Init)
+                    // handshake goes here if needed
 
                     loop { // Data Loop
                         tokio::select! {

@@ -8,7 +8,7 @@ pub const P2P_TYPE_CMD: u8 = 2;
 
 #[derive(Debug, Clone)]
 pub enum P2PMessage {
-    Gossip(Vec<u8>), // Placeholder for Gossip List
+    Gossip(Vec<u8>),
     Command(P2PCommand),
 }
 
@@ -31,10 +31,6 @@ impl P2PCommand {
     }
 
     pub fn sign(&mut self, key: &SigningKey) {
-        // Sign Payload Only (Matches C logic usually, but verify!)
-        // C struct: nonce, sig, len, payload.
-        // If C verifies signature over payload, we sign payload.
-        // Assuming sign(payload) for now.
         let sig = key.sign(&self.payload);
         self.signature = sig.to_bytes();
     }
@@ -43,35 +39,22 @@ impl P2PCommand {
 impl P2PMessage {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
-        // 1. Magic
-        buf.write_u32::<BigEndian>(P2P_MAGIC).unwrap(); // 0-3
+        buf.write_u32::<BigEndian>(P2P_MAGIC).unwrap();
         
         match self {
             P2PMessage::Command(cmd) => {
-                // 2. Type (CMD)
-                buf.write_u8(P2P_TYPE_CMD).unwrap(); // 4
-                
-                // 3. Nonce
-                buf.write_u32::<BigEndian>(cmd.nonce).unwrap(); // 5-8
-                
-                // 4. Signature
-                buf.write_all(&cmd.signature).unwrap(); // 9-73
-                
-                // 5. Payload Len (u16)
-                let len = cmd.payload.len() as u16;
-                buf.write_u16::<BigEndian>(len).unwrap(); // 73-75
-                
-                // 6. Payload
-                buf.write_all(&cmd.payload).unwrap(); // 75...
+                buf.write_u8(P2P_TYPE_CMD).unwrap();
+                buf.write_u32::<BigEndian>(cmd.nonce).unwrap();
+                buf.write_all(&cmd.signature).unwrap();
+                buf.write_u16::<BigEndian>(cmd.payload.len() as u16).unwrap();
+                buf.write_all(&cmd.payload).unwrap();
             }
             P2PMessage::Gossip(data) => {
-                // 2. Type (GOSSIP)
                 buf.write_u8(P2P_TYPE_GOSSIP).unwrap();
-                // Reserved/Count logic here...
-                // (Stub for now as C implementation of Gossip isn't fully analyzed)
                 buf.extend_from_slice(data);
             }
         }
         buf
     }
 }
+

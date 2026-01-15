@@ -36,7 +36,6 @@ static void add_nonce(uint32_t nonce) {
 }
 
 int p2p_init(void) {
-    // Zero out table
     memset(table, 0, sizeof(table));
 
     int sock = socket(AF_INET, SOCK_DGRAM, 0);

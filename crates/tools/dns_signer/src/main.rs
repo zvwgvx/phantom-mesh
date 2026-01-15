@@ -22,7 +22,6 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    // 1. Load Key
     let key_bytes = fs::read(&cli.key).expect("Failed to read master key file");
     let secret: SecretKey = if key_bytes.len() == 32 {
         key_bytes.try_into().unwrap()
@@ -33,9 +32,6 @@ fn main() {
     };
     let signing_key = SigningKey::from(secret);
 
-    // 2. Format Message
-    // Peers input might be ["1.2.3.4:80", "5.6.7.8:90"]
-    // Wire Format: "1.2.3.4:80;5.6.7.8:90;"
     let mut msg = String::new();
     for peer in cli.peers {
         // Simple normalization: replace spaces with ; if user pasted a list
@@ -48,15 +44,13 @@ fn main() {
 
     println!("[*] Message Content: {}", msg);
 
-    // 3. Sign
     let signature = signing_key.sign(msg.as_bytes());
     let sig_b64 = general_purpose::STANDARD.encode(signature.to_bytes());
     let msg_b64 = general_purpose::STANDARD.encode(msg.as_bytes());
 
-    // 4. Output
     let payload = format!("SIG:{}|MSG:{}", sig_b64, msg_b64);
     
-    println!("\n✅ GENERATED DNS TXT RECORD:");
+    println!("\nGENERATED DNS TXT RECORD:");
     println!("---------------------------------------------------");
     println!("{}", payload);
     println!("---------------------------------------------------");

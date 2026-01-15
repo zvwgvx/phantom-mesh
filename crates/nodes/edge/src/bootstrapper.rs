@@ -21,19 +21,14 @@ const MASTER_PUB_KEY: [u8; 32] = [
 
 // --- TRAITS ---
 
-/// Abstract Provider for Bootstrapping logic (HTTP, DoH, P2P, etc.)
 #[async_trait::async_trait]
 pub trait BootstrapProvider: Send + Sync {
-    /// Attempt to fetch the Raw Signed Payload "SIG:|MSG:"
     async fn fetch_payload(&self, client: &Client) -> Result<String, Box<dyn Error + Send + Sync>>;
-    
-    /// Identification for logging
     fn name(&self) -> String;
 }
 
 // --- PROVIDERS ---
 
-/// Dead Drop Provider (Github Gist, Pastebin, Twitter/X)
 pub struct HttpProvider {
     pub url: String,
 }
@@ -51,7 +46,6 @@ impl BootstrapProvider for HttpProvider {
     }
 }
 
-/// DNS-over-HTTPS Provider (Google, Cloudflare, Quad9)
 pub struct DohProvider {
     pub domain: String,
     pub resolver_url: String, // e.g. "https://dns.google/resolve"

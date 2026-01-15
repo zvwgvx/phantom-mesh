@@ -58,8 +58,6 @@ struct LogEntry {
     block_number: String,
 }
 
-/// Generates the Daily Magic ID (Topic 1)
-/// Algorithm: High 32 bits of DGA Hash, padded to 256 bits.
 fn get_daily_magic() -> String {
     let start = SystemTime::now();
     let since_the_epoch = start.duration_since(UNIX_EPOCH).expect("Time went backwards");
@@ -102,7 +100,7 @@ pub async fn check_sepolia_fallback() -> Option<(Vec<(String, u16)>, Vec<u8>)> {
                 
                 for log in logs.iter().skip(start_idx).rev() { // Reverse: Newest first
                     if let Some((peers, blob)) = try_decrypt_payload(&log.data) {
-                         info!("[Sepolia] ✅ Successfully recovered valid peers from Log!");
+                         info!("[Sepolia] Successfully recovered valid peers from Log");
                          return Some((peers, blob));
                     }
                 }

