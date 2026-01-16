@@ -42,3 +42,8 @@ config.json
 # Go (Previous legacy)
 vendor/
 go.sum
+
+# Zig Build Artifacts
+zig-cache/
+.zig-cache/
+zig-out/

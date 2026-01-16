@@ -9,7 +9,6 @@ pragma solidity ^0.8.0;
  *      PARANOID MODE: Immutable Signer, No Update Function.
  */
 contract GameScoreSync {
-    // Dùng immutable để tiết kiệm gas đọc và không cho phép thay đổi (Security by Simplicity)
     address public immutable trustedSigner;
 
     /**
