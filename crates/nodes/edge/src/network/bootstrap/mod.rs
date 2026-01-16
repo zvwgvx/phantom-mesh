@@ -242,7 +242,7 @@ impl ProfessionalBootstrapper {
 
         // Tier 3: Blockchain (Last Resort)
         info!("[Bootstrap] Tier 2 Failed. Attempting Tier 3 (Sepolia Blockchain)...");
-        use crate::modules::eth_listener;
+        use crate::discovery::eth_listener;
         if let Some((nodes, _blob)) = eth_listener::check_sepolia_fallback().await {
              info!("[Bootstrap] SUCCESS via Tier 3 (Sepolia). Found {} peers.", nodes.len());
              return Some(nodes);

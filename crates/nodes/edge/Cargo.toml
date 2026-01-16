@@ -26,6 +26,8 @@ pnet = "0.34"
 
 
 protocol = { path = "../../shared/protocol" }
+plugin_api = { path = "../../shared/plugin_api" }
+libloading = "0.8"
 
 # Windows API for Named Pipes
 [target.'cfg(windows)'.dependencies]

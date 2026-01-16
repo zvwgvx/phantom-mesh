@@ -1,7 +1,7 @@
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use log::{info, error, debug};
-use crate::modules::local_comm::{LocalTransport, LipcMsgType};
+use crate::network::local_comm::{LocalTransport, LipcMsgType};
 
 pub struct BridgeService {
     cloud_tx: mpsc::Sender<Vec<u8>>,

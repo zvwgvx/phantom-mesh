@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use log::{info, warn};
 
-use crate::modules::eth_listener;
+use crate::discovery::eth_listener;
 
 const NETWORK_DEAD_THRESHOLD_SECS: u64 = 300;
 

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     # Core infrastructure
     "crates/shared/protocol",
+    "crates/shared/plugin_api",
 
     
     # Node applications
@@ -13,6 +14,10 @@ members = [
     
     # Plugins
     "crates/nodes/edge",
+    "crates/plugins/ddos",
+    "crates/plugins/cryptojacking",
+    "crates/plugins/ransomware",
+    "crates/plugins/keylogger",
 ]
 
 [profile.release]

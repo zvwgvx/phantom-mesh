@@ -826,6 +826,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cryptojacking"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "plugin_api",
+]
+
+[[package]]
 name = "ctr"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -866,6 +874,14 @@ name = "data-encoding"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
+
+[[package]]
+name = "ddos"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "plugin_api",
+]
 
 [[package]]
 name = "der"
@@ -1051,7 +1067,9 @@ dependencies = [
  "ed25519-dalek",
  "env_logger 0.10.2",
  "hex",
+ "libloading",
  "log",
+ "plugin_api",
  "pnet",
  "protocol",
  "rand 0.8.5",
@@ -2320,6 +2338,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "keylogger"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "plugin_api",
+]
+
+[[package]]
 name = "lalrpop"
 version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2360,6 +2386,16 @@ name = "libc"
 version = "0.2.178"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
+
+[[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
 
 [[package]]
 name = "libm"
@@ -2897,6 +2933,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
+name = "plugin_api"
+version = "0.1.0"
+
+[[package]]
 name = "pnet"
 version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3335,6 +3375,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
 dependencies = [
  "rand_core 0.9.3",
+]
+
+[[package]]
+name = "ransomware"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "plugin_api",
 ]
 
 [[package]]
