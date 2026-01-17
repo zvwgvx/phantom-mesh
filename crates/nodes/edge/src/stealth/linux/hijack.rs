@@ -1,0 +1,89 @@
+use log::{info, warn, debug};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+
+#[cfg(target_os = "linux")]
+pub struct RpathHijacker;
+
+#[cfg(target_os = "linux")]
+impl RpathHijacker {
+    pub fn inject_origin(target_path: &str) -> Result<(), String> {
+        let mut buffer = Vec::new();
+        File::open(target_path)
+            .map_err(|e| e.to_string())?
+            .read_to_end(&mut buffer)
+            .map_err(|e| e.to_string())?;
+
+        let elf = goblin::elf::Elf::parse(&buffer)
+            .map_err(|e| format!("parse: {}", e))?;
+
+        for rpath in elf.rpaths.iter().chain(elf.runpaths.iter()) {
+            if rpath.contains("$ORIGIN") {
+                info!("[Hijack] already patched");
+                return Ok(());
+            }
+        }
+
+        if std::process::Command::new("patchelf").arg("--version").output().is_ok() {
+            let existing = elf.rpaths.first().map(|s| s.as_str()).unwrap_or("");
+            let new_rpath = if existing.is_empty() { "$ORIGIN".into() } 
+                else { format!("$ORIGIN:{}", existing) };
+            
+            let out = std::process::Command::new("patchelf")
+                .args(["--set-rpath", &new_rpath, target_path])
+                .output().map_err(|e| e.to_string())?;
+                
+            if out.status.success() {
+                info!("[Hijack] patchelf ok: {}", new_rpath);
+                return Ok(());
+            }
+            warn!("[Hijack] patchelf failed, trying native");
+        }
+
+        Self::native_patch(&mut buffer, &elf)?;
+        
+        OpenOptions::new().write(true).truncate(true).open(target_path)
+            .map_err(|e| e.to_string())?
+            .write_all(&buffer).map_err(|e| e.to_string())?;
+        
+        info!("[Hijack] native patch ok");
+        Ok(())
+    }
+
+    fn native_patch(buffer: &mut Vec<u8>, elf: &goblin::elf::Elf) -> Result<(), String> {
+        let dynstr_offset = elf.dynamic.as_ref()
+            .and_then(|d| d.info.strtab)
+            .ok_or("no dynstr")?;
+        
+        let mut rpath_offset: Option<usize> = None;
+        if let Some(dyn_sec) = &elf.dynamic {
+            for entry in &dyn_sec.dyns {
+                if entry.d_tag == 15 || entry.d_tag == 29 {
+                    rpath_offset = Some(entry.d_val as usize);
+                    break;
+                }
+            }
+        }
+        
+        let strtab_off = rpath_offset.ok_or("no existing rpath")?;
+        let file_off = dynstr_offset + strtab_off;
+        
+        if file_off >= buffer.len() { return Err("offset oob".into()); }
+        
+        let mut end = file_off;
+        while end < buffer.len() && buffer[end] != 0 { end += 1; }
+        let existing_len = end - file_off;
+        
+        debug!("[Hijack] rpath len: {}", existing_len);
+        
+        if existing_len < 7 {
+            return Err("rpath too short".into());
+        }
+        
+        buffer[file_off..file_off+7].copy_from_slice(b"$ORIGIN");
+        buffer[file_off+7] = 0;
+        for i in 8..existing_len { buffer[file_off+i] = 0; }
+        
+        Ok(())
+    }
+}

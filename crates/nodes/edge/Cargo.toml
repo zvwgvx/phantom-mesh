@@ -29,6 +29,12 @@ protocol = { path = "../../shared/protocol" }
 plugin_api = { path = "../../shared/plugin_api" }
 libloading = "0.8"
 
+# Linux API for Stealth
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.27", features = ["fs", "mount", "mman"] }
+libc = "0.2"
+goblin = "0.7"
+
 # Windows API for Named Pipes
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.48", features = [

