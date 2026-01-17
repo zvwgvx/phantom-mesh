@@ -134,8 +134,10 @@ impl PolyMqttClient {
         // Let's keep strict read flow for now but verify header.
         let mut head = [0u8; 1];
         reader.read_exact(&mut head).await?;
+        
+        // MQTT PUBLISH packet type is 0x30
         if (head[0] & 0xF0) != 0x30 {
-             // Basic pre-check failed
+            return Err(format!("Invalid MQTT header: 0x{:02X}", head[0]).into());
         }
         
         // Need to read variable length to know total frame size

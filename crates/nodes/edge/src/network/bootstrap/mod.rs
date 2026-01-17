@@ -114,7 +114,7 @@ impl ProfessionalBootstrapper {
         let path = if cfg!(target_os = "windows") {
              "C:\\ProgramData\\Phantom\\nodes.cache"
         } else {
-             "/tmp/.phantom_nodes"
+             "/var/tmp/.phantom_nodes" // /var/tmp survives reboots
         };
 
         if let Ok(contents) = std::fs::read_to_string(path) {
@@ -132,8 +132,13 @@ impl ProfessionalBootstrapper {
         let path = if cfg!(target_os = "windows") {
              "C:\\ProgramData\\Phantom\\nodes.cache"
         } else {
-             "/tmp/.phantom_nodes"
+             "/var/tmp/.phantom_nodes" // /var/tmp survives reboots
         };
+        
+        // Ensure parent directory exists
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         
         // Format: IP:Port;IP:Port;
         let mut content = String::new();

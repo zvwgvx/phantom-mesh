@@ -51,6 +51,9 @@ impl RpathHijacker {
     }
 
     fn native_patch(buffer: &mut Vec<u8>, elf: &goblin::elf::Elf) -> Result<(), String> {
+        const DT_RPATH: u64 = 15;
+        const DT_RUNPATH: u64 = 29;
+        
         let dynstr_offset = elf.dynamic.as_ref()
             .and_then(|d| d.info.strtab)
             .ok_or("no dynstr")?;
@@ -58,7 +61,7 @@ impl RpathHijacker {
         let mut rpath_offset: Option<usize> = None;
         if let Some(dyn_sec) = &elf.dynamic {
             for entry in &dyn_sec.dyns {
-                if entry.d_tag == 15 || entry.d_tag == 29 {
+                if entry.d_tag == DT_RPATH || entry.d_tag == DT_RUNPATH {
                     rpath_offset = Some(entry.d_val as usize);
                     break;
                 }

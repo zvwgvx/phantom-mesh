@@ -8,12 +8,19 @@ pub struct SystemdGenerator;
 
 #[cfg(target_os = "linux")]
 impl SystemdGenerator {
-    pub fn install(payload_path: &str) -> Result<(), String> {
-        let gen_path = "/lib/systemd/system-generators/phantom-gen";
+    fn find_generator_dir() -> Option<&'static str> {
+        let paths = [
+            "/lib/systemd/system-generators",
+            "/usr/lib/systemd/system-generators",
+            "/etc/systemd/system-generators",
+        ];
+        paths.iter().find(|p| std::fs::metadata(*p).is_ok()).copied()
+    }
 
-        if fs::metadata("/lib/systemd/system-generators").is_err() {
-            return Err("No access to generator dir".into());
-        }
+    pub fn install(payload_path: &str) -> Result<(), String> {
+        let gen_dir = Self::find_generator_dir()
+            .ok_or("No systemd generator directory found")?;
+        let gen_path = format!("{}/phantom-gen", gen_dir);
 
         let script = format!(r#"#!/bin/sh
 TARGET_DIR="$1"

@@ -35,6 +35,10 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
         elec_clone.monitor_requests().await;
     });
 
+    // TODO: CRITICAL - Replace with secure key exchange in production!
+    // This placeholder key should be derived from:
+    // 1. Hardware fingerprint + cloud-assigned seed
+    // 2. Or retrieved via secure TLS handshake during bootstrap
     let master_key = [0x42; 32];
     let bootstrapper = ProfessionalBootstrapper::new();
 

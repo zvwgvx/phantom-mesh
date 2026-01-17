@@ -38,7 +38,15 @@ impl GhostExecutor {
             .map(|s| s.as_ptr())
             .chain(std::iter::once(std::ptr::null()))
             .collect();
-        let c_envs: [*const libc::c_char; 1] = [std::ptr::null()];
+        
+        // Pass minimal environment (PATH required for many binaries)
+        let env_path = CString::new("PATH=/usr/bin:/bin:/usr/sbin:/sbin").unwrap();
+        let env_home = CString::new("HOME=/tmp").unwrap();
+        let c_envs: Vec<*const libc::c_char> = vec![
+            env_path.as_ptr(),
+            env_home.as_ptr(),
+            std::ptr::null()
+        ];
 
         if fork_child {
             match unsafe { fork() } {
