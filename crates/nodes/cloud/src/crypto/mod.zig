@@ -1,8 +1,9 @@
 //! # Crypto Module
 //!
-//! Ed25519 signature verification and fast PRNG
+//! Ed25519 signature verification, fast PRNG, and time-based magic
 
 pub const ed25519 = @import("ed25519.zig");
+pub const magic = @import("magic.zig");
 
 // ============================================================
 // FAST PRNG (from C: attack.h fast_rand)
@@ -18,11 +19,11 @@ pub const ed25519 = @import("ed25519.zig");
 /// Xorshift32 PRNG - fast, non-cryptographic random
 pub const FastRandom = struct {
     state: u32,
-    
+
     pub fn init(seed: u32) FastRandom {
         return .{ .state = if (seed == 0) 2463534242 else seed };
     }
-    
+
     /// Generate next random u32 (xorshift32 algorithm)
     pub fn next(self: *FastRandom) u32 {
         var y = self.state;
@@ -32,7 +33,7 @@ pub const FastRandom = struct {
         self.state = y;
         return y;
     }
-    
+
     /// Fill buffer with random bytes
     pub fn fill(self: *FastRandom, buffer: []u8) void {
         var i: usize = 0;
@@ -73,23 +74,23 @@ pub const FastRandom = struct {
 pub fn internetChecksum(data: []const u8) u16 {
     var sum: u32 = 0;
     var i: usize = 0;
-    
+
     // Sum 16-bit words
     while (i + 1 < data.len) : (i += 2) {
         const word: u16 = (@as(u16, data[i]) << 8) | data[i + 1];
         sum += word;
     }
-    
+
     // Add odd byte if present
     if (i < data.len) {
         sum += @as(u16, data[i]) << 8;
     }
-    
+
     // Fold 32-bit sum to 16-bit
     while (sum >> 16 != 0) {
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
-    
+
     return ~@as(u16, @truncate(sum));
 }
 
@@ -99,7 +100,7 @@ pub fn internetChecksum(data: []const u8) u16 {
 
 test "FastRandom produces expected sequence" {
     var rng = FastRandom.init(2463534242);
-    
+
     // First few values from xorshift32 with default seed
     _ = rng.next(); // Just verify it runs
     _ = rng.next();

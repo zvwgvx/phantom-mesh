@@ -6,8 +6,9 @@ use serde::{Serialize, Deserialize};
 use rand::Rng;
 use log::info;
 
+use crate::crypto::{p2p_magic, p2p_magic_prev};
+
 const DISCOVERY_PORT: u16 = 31338;
-const DISCOVERY_MAGIC: u32 = 0xDEAD0001;
 const BROADCAST_ADDR: &str = "255.255.255.255:31338";
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -93,7 +94,7 @@ impl ElectionService {
         
         // 1. Send WHO_IS_LEADER
         let packet = ElectionPacket {
-            magic: DISCOVERY_MAGIC,
+            magic: p2p_magic(),
             msg_type: MessageType::WhoIsLeader,
             node_id: self.node_id,
             rank: self.rank,
@@ -120,7 +121,7 @@ impl ElectionService {
                 self.socket.recv_from(&mut buf)
             ).await {
                 if let Ok(resp) = serde_json::from_slice::<ElectionPacket>(&buf[..len]) {
-                    if resp.magic == DISCOVERY_MAGIC {
+                    if resp.magic == p2p_magic() {
                         match resp.msg_type {
                             MessageType::IAmLeader => {
                                 info!("[Election] Found Leader: {} @ {}", resp.node_id, addr);
@@ -144,7 +145,7 @@ impl ElectionService {
         
         // Announce Leadership
         let win_packet = ElectionPacket {
-            magic: DISCOVERY_MAGIC,
+            magic: p2p_magic(),
             msg_type: MessageType::IAmLeader,
             node_id: self.node_id,
             rank: self.rank,
@@ -164,13 +165,13 @@ impl ElectionService {
         loop {
             if let Ok((len, addr)) = self.socket.recv_from(&mut buf).await {
                 if let Ok(pkt) = serde_json::from_slice::<ElectionPacket>(&buf[..len]) {
-                    if pkt.magic == DISCOVERY_MAGIC {
+                    if pkt.magic == p2p_magic() {
                         // If we are Leader, respond
                         let role = self.role.lock().await;
                         if *role == NodeRole::Leader && pkt.msg_type == MessageType::WhoIsLeader {
                             info!("[Election] Received request from {}. Responding I_AM_LEADER.", pkt.node_id);
                             let resp = ElectionPacket {
-                                magic: DISCOVERY_MAGIC,
+                                magic: p2p_magic(),
                                 msg_type: MessageType::IAmLeader,
                                 node_id: self.node_id,
                                 rank: self.rank,

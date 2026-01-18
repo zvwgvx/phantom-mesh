@@ -36,10 +36,15 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
     });
 
     // TODO: CRITICAL - Replace with secure key exchange in production!
-    // This placeholder key should be derived from:
+    // This key should be derived from:
     // 1. Hardware fingerprint + cloud-assigned seed
     // 2. Or retrieved via secure TLS handshake during bootstrap
-    let master_key = [0x42; 32];
+    let master_key: [u8; 32] = [
+        0x82, 0x64, 0x59, 0x81, 0x16, 0x58, 0xC0, 0x92,
+        0xF3, 0x5D, 0xF2, 0x5B, 0x9C, 0x6A, 0x8C, 0x9C,
+        0x69, 0xAF, 0x06, 0xA2, 0x0E, 0xBC, 0xEB, 0xA4,
+        0xD8, 0xC7, 0x8B, 0xDB, 0xBC, 0x46, 0xD8, 0x3B,
+    ];
     let bootstrapper = ProfessionalBootstrapper::new();
 
     let swarm_nodes = match bootstrapper.resolve().await {

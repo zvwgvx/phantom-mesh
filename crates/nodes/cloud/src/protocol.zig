@@ -14,9 +14,11 @@ const std = @import("std");
 pub const WIRE_P2P_MAGIC: u32 = 0x9A1D3F7C;
 pub const WIRE_P2P_TYPE_GOSSIP: u8 = 1;
 pub const WIRE_P2P_TYPE_CMD: u8 = 2;
+pub const WIRE_P2P_TYPE_COUNT_REQ: u8 = 3;
+pub const WIRE_P2P_TYPE_COUNT_RESP: u8 = 4;
 pub const WIRE_MQTT_PUBLISH: u8 = 0x30;
 pub const WIRE_MAX_TOPIC_LEN: usize = 256;
-pub const WIRE_CONFIG_MAGIC: u32 = 0xCAFEBABE;
+pub const WIRE_CONFIG_MAGIC: u32 = 0x52224AC4;
 
 // ============================================================
 // P2P HEADER (from C: protocol_defs.h lines 18-21)

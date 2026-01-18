@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // --- CONFIGURATION ---
 const SEPOLIA_RPC: &str = "https://rpc.sepolia.org";
 const CONTRACT_ADDR: &str = "0x8A58Da9B24C24b9D6Faf2118eB3845FE7D4b13c5";
-const DGA_SEED: u64 = 0xCAFEBABE;
+const DGA_SEED: u64 = 0x36A5EC9D09C60386;
 
 // ABI Fragment for submitScore(uint256,bytes,uint8,bytes32,bytes32)
 abigen!(

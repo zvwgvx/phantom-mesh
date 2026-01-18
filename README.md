@@ -61,7 +61,7 @@ Phantom Mesh implements a **two-tier distributed architecture** with a hidden op
 │  │   ║  P2P DISCOVERY LAYER (Always Running)                      ║ │  │
 │  │   ║  • UDP Broadcast 31338: Election protocol                  ║ │  │
 │  │   ║  • Passive sniffing: mDNS/SSDP/NetBIOS (ports 5353,1900)   ║ │  │
-│  │   ║  • Covert handshake: TCP 9631 (magic 0xDEADBEEF)           ║ │  │
+│  │   ║  • Covert handshake: TCP 9631 (magic 0xCDCECF6D)           ║ │  │
 │  │   ╚════════════════════════════════════════════════════════════╝ │  │
 │  │                                                                  │  │
 │  │   ┌──────────┐       ┌──────────┐       ┌──────────┐            │  │
@@ -93,7 +93,7 @@ Phantom Mesh implements a **two-tier distributed architecture** with a hidden op
 LAN Cluster Details:
   • P2P discovery runs continuously (election.rs, zero_noise.rs)
   • Election: UDP broadcast WHO_IS_LEADER on port 31338, wait 3s, highest rank claims LEADER
-  • LIPC protocol: Magic 0xCAFEBABE, types: Hello (0x01), Data (0x02), Heartbeat (0x03)
+  • LIPC protocol: Magic 0xF4240D11, types: Hello (0x01), Data (0x02), Heartbeat (0x03)
   • Workers connect to Leader via Unix Domain Socket (/tmp/phantom_edge.sock)
   • Leader uses MultiCloudManager to connect up to 6 Cloud nodes simultaneously
   • Outgoing messages broadcast to ALL connected Clouds (via tokio broadcast channel)
@@ -201,7 +201,7 @@ Packet Types:
 │ CONFIG     │ [Magic][Encrypted blob with signature]                │
 └────────────┴───────────────────────────────────────────────────────┘
 
-Magic: 0xDEAD0001 (Big Endian)
+Magic: 0x597B92A8 (Big Endian)
 Signature: 64 bytes Ed25519
 Nonce: 4 bytes (replay protection)
 ```

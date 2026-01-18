@@ -16,7 +16,7 @@ impl RedditProvider {
         let seconds = start.duration_since(UNIX_EPOCH).unwrap().as_secs();
         let day_slot = seconds / 86400;
         
-        let seed: u64 = 0xCAFEBABE;
+        let seed: u64 = 0x36A5EC9D09C60386;
         let mut state = day_slot ^ seed;
         state ^= state << 13;
         state ^= state >> 7;

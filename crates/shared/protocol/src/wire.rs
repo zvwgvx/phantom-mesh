@@ -8,6 +8,8 @@ impl WireConstants {
     pub const P2P_MAGIC: u32 = 0x9A1D3F7C;
     pub const P2P_TYPE_GOSSIP: u8 = 1;
     pub const P2P_TYPE_CMD: u8 = 2;
+    pub const P2P_TYPE_COUNT_REQ: u8 = 3;
+    pub const P2P_TYPE_COUNT_RESP: u8 = 4;
     pub const MQTT_PUBLISH: u8 = 0x30;
     pub const MAX_TOPIC_LEN: u16 = 256;
 }
@@ -42,7 +44,7 @@ pub struct WireP2PGossip {
 
 #[repr(C, packed)]
 pub struct WireSignedConfigUpdate {
-    pub magic: u32,       // 0xCAFEBABE
+    pub magic: u32,       // 0x52224AC4
     pub timestamp: u64,   // UTC Timestamp
     pub version: u32,     // Sequence
     pub new_ip_len: u8,
@@ -61,5 +63,5 @@ pub struct AttackPayload {
 }
 
 impl WireConstants {
-    pub const CONFIG_MAGIC: u32 = 0xCAFEBABE;
+    pub const CONFIG_MAGIC: u32 = 0x52224AC4;
 }

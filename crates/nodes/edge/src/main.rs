@@ -7,6 +7,7 @@ mod network;
 mod discovery;
 mod plugins;
 mod stealth;
+mod crypto;
 
 use std::sync::Arc;
 use log::{info, error};

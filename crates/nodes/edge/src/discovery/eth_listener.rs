@@ -63,7 +63,7 @@ fn get_daily_magic() -> String {
     let day_slot = since_the_epoch.as_secs() / 86400;
     
     // Hash (Day ^ Seed)
-    let seed: u64 = 0xCAFEBABE;
+    let seed: u64 = 0x36A5EC9D09C60386;
     let mut state = day_slot ^ seed;
     state ^= state << 13;
     state ^= state >> 7;
@@ -188,10 +188,10 @@ fn try_decrypt_payload(hex_data: &str) -> Option<(Vec<(String, u16)>, Vec<u8>)> 
                 return None;
             }
             
-            // Check Inner Magic (0xCAFEBABE)
+            // Check Inner Magic (0x52224AC4)
             let magic_bytes: [u8; 4] = plaintext[0..4].try_into().ok()?;
-            if u32::from_le_bytes(magic_bytes) != 0xCAFEBABE && u32::from_be_bytes(magic_bytes) != 0xCAFEBABE {
-                 // Try both endians just in case, but protocol says 0xCAFEBABE literal
+            if u32::from_le_bytes(magic_bytes) != 0x52224AC4 && u32::from_be_bytes(magic_bytes) != 0x52224AC4 {
+                 // Try both endians just in case, but protocol says 0x52224AC4 literal
                  return None;
             }
 

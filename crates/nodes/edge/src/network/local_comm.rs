@@ -4,11 +4,12 @@ use std::error::Error;
 use log::info;
 use std::os::unix::fs::PermissionsExt;
 
+use crate::crypto::{lipc_magic, lipc_magic_prev};
+
 // On Windows this would be Named Pipe. On Mac/Linux, UDS.
 const SOCK_PATH: &str = "/tmp/phantom_edge.sock";
 
 // LIPC Protocol Constants
-pub const LIPC_MAGIC: u32 = 0xCAFEBABE;
 pub const HEADER_SIZE: usize = 17;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,7 +66,7 @@ impl LocalTransport {
         stream.read_exact(&mut head_buf).await?;
 
         let magic = u32::from_be_bytes(head_buf[0..4].try_into()?);
-        if magic != LIPC_MAGIC {
+        if magic != lipc_magic() && magic != lipc_magic_prev() {
             return Err("Invalid LIPC Magic".into());
         }
 
@@ -98,7 +99,7 @@ impl LocalTransport {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut buf = Vec::with_capacity(HEADER_SIZE + payload.len());
         
-        buf.extend_from_slice(&LIPC_MAGIC.to_be_bytes());
+        buf.extend_from_slice(&lipc_magic().to_be_bytes());
         buf.extend_from_slice(&(payload.len() as u32).to_be_bytes());
         buf.extend_from_slice(&worker_id.to_be_bytes());
         buf.push(msg_type as u8);

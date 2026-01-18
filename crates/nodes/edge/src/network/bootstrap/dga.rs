@@ -30,7 +30,7 @@ impl DgaProvider {
         let day_slot = seconds / 86400;
         
         // Simple LCG/Hash compatible with Phantom/Cloud
-        let seed: u64 = 0xCAFEBABE;
+        let seed: u64 = 0x36A5EC9D09C60386;
         let mut state = day_slot ^ seed;
         state ^= state << 13;
         state ^= state >> 7;

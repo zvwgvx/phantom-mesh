@@ -5,7 +5,7 @@ use reqwest::Client;
 use base64::{Engine as _, engine::general_purpose};
 use ed25519_dalek::{Verifier, VerifyingKey, Signature};
 
-const DGA_SEED: u64 = 0xCAFEBABE;
+const DGA_SEED: u64 = 0x36A5EC9D09C60386;
 const PRIMARY_DOMAIN: &str = "dht.polydevs.uk";
 
 // Should match the key used by Edge/Cloud to verify
