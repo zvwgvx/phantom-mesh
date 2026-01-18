@@ -1,8 +1,10 @@
 # Phantom Mesh
 
-![Phantom Mesh](docs/banner.png)
-
 A distributed, resilient command-and-control framework with multi-platform support.
+
+## Architecture
+
+![Network Architecture](docs/architecture.png)
 
 ## Features
 
