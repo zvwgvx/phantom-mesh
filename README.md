@@ -24,46 +24,46 @@ A distributed, resilient command-and-control (C2) framework with modular archite
 Phantom Mesh implements a **two-tier distributed architecture** with a hidden operator node:
 
 ```
-                          ┌─────────────────────────────────────────────────────────────┐
-                          │                        CONTROL PLANE                        │
-                          │                   Cloud P2P Mesh (UDP 31337)                │
-                          │                                                             │
-                          │  ┌───────────┐     ┌───────────┐     ┌─────────────────┐   │
-                          │  │   Cloud   │◄───►│   Cloud   │◄───►│    PHANTOM      │   │
-                          │  │   Node    │ P2P │   Node    │ P2P │ (Hidden Master) │   │
-                          │  │   (Zig)   │     │   (Zig)   │     │     (Rust)      │   │
-                          │  └─────┬─────┘     └─────┬─────┘     └────────┬────────┘   │
-                          │        │                 │                    │            │
-                          │  ┌─────┴─────┐     ┌─────┴─────┐     ┌───────┴────────┐   │
-                          │  │  Verify   │     │  Verify   │     │  PRIVATE KEY   │   │
-                          │  │  + Relay  │     │  + Relay  │     │  Sign + Send   │   │
-                          │  └─────┬─────┘     └─────┬─────┘     └───────┬────────┘   │
-                          │        │                 │                   │            │
-                          │        │                 │                   │ SSH        │
-                          │        │   (Identical P2P packets)          ▼            │
-                          │        │                 │          ┌──────────────┐      │
-                          │        │                 │          │   Operator   │      │
-                          │        │                 │          │   Terminal   │      │
-                          │        │                 │          └──────────────┘      │
-                          └────────┼─────────────────┼────────────────────────────────┘
-                                   │                 │
-                                   │ MQTT            │ MQTT
-                                   ▼                 ▼
-                          ┌─────────────────────────────────────────────────────────────┐
-                          │                       EXECUTION PLANE                       │
-                          │                 Edge Nodes (Rust) — Agents                  │
-                          │                                                             │
-                          │    ┌──────────────────┐      ┌──────────────────┐          │
-                          │    │  Local Network A │      │  Local Network B │          │
-                          │    │  ┌────────────┐  │      │  ┌────────────┐  │          │
-                          │    │  │   LEADER   │  │      │  │   LEADER   │  │          │
-                          │    │  └──────┬─────┘  │      │  └──────┬─────┘  │          │
-                          │    │         │ IPC    │      │         │ IPC    │          │
-                          │    │  ┌──────┴─────┐  │      │  ┌──────┴─────┐  │          │
-                          │    │  │  Workers   │  │      │  │  Workers   │  │          │
-                          │    │  └────────────┘  │      │  └────────────┘  │          │
-                          │    └──────────────────┘      └──────────────────┘          │
-                          └─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                            CONTROL PLANE                               │
+│                       Cloud P2P Mesh (UDP 31337)                       │
+│                                                                        │
+│   ┌───────────┐       ┌───────────┐       ┌───────────────────┐        │
+│   │   Cloud   │◄─────►│   Cloud   │◄─────►│      PHANTOM      │        │
+│   │   Node    │  P2P  │   Node    │  P2P  │   (Hidden Master) │        │
+│   │   (Zig)   │       │   (Zig)   │       │       (Rust)      │        │
+│   └─────┬─────┘       └─────┬─────┘       └─────────┬─────────┘        │
+│         │                   │                       │                  │
+│   ┌─────┴─────┐       ┌─────┴─────┐       ┌─────────┴─────────┐        │
+│   │  Verify   │       │  Verify   │       │    PRIVATE KEY    │        │
+│   │  + Relay  │       │  + Relay  │       │    Sign + Send    │        │
+│   └─────┬─────┘       └─────┬─────┘       └─────────┬─────────┘        │
+│         │                   │                       │                  │
+│         │                   │                       │ SSH (Operator)   │
+│         │    (Identical P2P packets)                ▼                  │
+│         │                   │             ┌───────────────┐            │
+│         │                   │             │    Operator   │            │
+│         │                   │             │    Terminal   │            │
+│         │                   │             └───────────────┘            │
+└─────────┼───────────────────┼──────────────────────────────────────────┘
+          │                   │
+          │ MQTT              │ MQTT
+          ▼                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                           EXECUTION PLANE                              │
+│                     Edge Nodes (Rust) — Agents                         │
+│                                                                        │
+│      ┌──────────────────┐            ┌──────────────────┐              │
+│      │  Local Network A │            │  Local Network B │              │
+│      │  ┌────────────┐  │            │  ┌────────────┐  │              │
+│      │  │   LEADER   │  │            │  │   LEADER   │  │              │
+│      │  └──────┬─────┘  │            │  └──────┬─────┘  │              │
+│      │         │ IPC    │            │         │ IPC    │              │
+│      │  ┌──────┴─────┐  │            │  ┌──────┴─────┐  │              │
+│      │  │  Workers   │  │            │  │  Workers   │  │              │
+│      │  └────────────┘  │            │  └────────────┘  │              │
+│      └──────────────────┘            └──────────────────┘              │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Insight: Phantom Blends Into Cloud Mesh
@@ -161,9 +161,9 @@ Both Cloud and Phantom use identical wire protocol:
 ```
 Packet Types:
 ┌────────────┬───────────────────────────────────────────────────────┐
-│ GOSSIP     │ [Magic][Type][Count][IP:Port pairs...]               │
-│ COMMAND    │ [Magic][Type][Nonce][Signature][Length][Payload]     │
-│ CONFIG     │ [Magic][Encrypted blob with signature]               │
+│ GOSSIP     │ [Magic][Type][Count][IP:Port pairs...]                │
+│ COMMAND    │ [Magic][Type][Nonce][Signature][Length][Payload]      │
+│ CONFIG     │ [Magic][Encrypted blob with signature]                │
 └────────────┴───────────────────────────────────────────────────────┘
 
 Magic: 0xDEAD0001 (Big Endian)
