@@ -9,7 +9,7 @@ use tokio::time::sleep;
 use tokio::sync::mpsc;
 use rand::Rng;
 
-use crate::network::client::PolyMqttClient;
+use crate::network::multi_cloud::MultiCloudManager;
 use crate::network::bootstrap::ProfessionalBootstrapper;
 use crate::network::bridge::BridgeService;
 use crate::network::local_comm::{LocalTransport, LipcMsgType};
@@ -60,17 +60,18 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
         return;
     }
 
-    let (ip, port) = &swarm_nodes[0];
-    let client = Arc::new(PolyMqttClient::new(ip, *port, &master_key));
+    // Create Multi-Cloud Manager (up to 6 connections)
+    let multi_cloud = Arc::new(MultiCloudManager::new(swarm_nodes, &master_key));
+    info!("[Leader] Connected to {} Cloud nodes", multi_cloud.connection_count());
     
-    // Channels for Client
+    // Channels for Multi-Cloud
     let (msg_tx, msg_rx) = mpsc::channel::<Vec<u8>>(100);
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<Vec<u8>>(100);
 
-    // Start Persistent Cloud Client
-    let client_clone = client.clone();
+    // Start all Cloud connections (with deduplication)
+    let mc_clone = multi_cloud.clone();
     tokio::spawn(async move {
-        client_clone.start_persistent_loop(msg_rx, cmd_tx).await;
+        mc_clone.start_all(cmd_tx, msg_rx).await;
     });
 
     // Start Cloud Heartbeat Loop

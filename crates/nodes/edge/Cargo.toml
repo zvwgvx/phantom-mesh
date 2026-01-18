@@ -17,6 +17,7 @@ ed25519-dalek = { version = "2.0", features = ["rand_core"] }
 hex = "0.4"
 socket2 = "0.5"
 async-trait = "0.1"
+lru = "0.12"
 pnet = "0.34"
 # Windows API for Named Pipes
 

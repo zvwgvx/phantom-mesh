@@ -7,6 +7,7 @@ pub mod bridge;
 pub mod local_comm;
 pub mod watchdog;
 pub mod bootstrap;
+pub mod multi_cloud;
 
 pub use client::PolyMqttClient;
 pub use bridge::BridgeService;

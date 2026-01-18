@@ -48,35 +48,57 @@ Phantom Mesh implements a **two-tier distributed architecture** with a hidden op
 └─────────┼───────────────────┼──────────────────────────────────────────┘
           │                   │
           └─────────┬─────────┘
-                    │ MQTT (up to 10 Cloud connections per Leader)
+                    │ MQTT (Leader → Cloud)
                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │                           EXECUTION PLANE                              │
 │                     Edge Nodes (Rust) — Agents                         │
 │                                                                        │
-│  ┌──────────────────────────────────┐   ┌──────────────────────────┐   │
-│  │        LAN Cluster A             │   │      LAN Cluster B       │   │
-│  │                                  │   │                          │   │
-│  │  ┌────────────────────────────┐  │   │  ┌────────────────────┐  │   │
-│  │  │         LEADER (1)         │  │   │  │    LEADER (1)      │  │   │
-│  │  │  ┌─────────────────────┐   │  │   │  │  ┌──────────────┐  │  │   │
-│  │  │  │ MQTT to Cloud x10   │   │  │   │  │  │ MQTT x10     │  │  │   │
-│  │  │  └─────────────────────┘   │  │   │  │  └──────────────┘  │  │   │
-│  │  └─────────────┬──────────────┘  │   │  └─────────┬──────────┘  │   │
-│  │                │ IPC (Unix/Pipe) │   │            │ IPC         │   │
-│  │  ┌─────────────┴──────────────┐  │   │  ┌─────────┴──────────┐  │   │
-│  │  │      WORKERS (N nodes)     │  │   │  │  WORKERS (N nodes) │  │   │
-│  │  │  ┌────┐ ┌────┐ ┌────┐ ... │  │   │  │  ┌────┐ ┌────┐ ... │  │   │
-│  │  │  │ W1 │ │ W2 │ │ W3 │     │  │   │  │  │ W1 │ │ W2 │     │  │   │
-│  │  │  └────┘ └────┘ └────┘     │  │   │  │  └────┘ └────┘     │  │   │
-│  │  └────────────────────────────┘  │   │  └────────────────────┘  │   │
-│  └──────────────────────────────────┘   └──────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │                      LAN CLUSTER                                 │  │
+│  │                                                                  │  │
+│  │   ╔════════════════════════════════════════════════════════════╗ │  │
+│  │   ║  P2P DISCOVERY LAYER (Always Running)                      ║ │  │
+│  │   ║  • UDP Broadcast 31338: Election protocol                  ║ │  │
+│  │   ║  • Passive sniffing: mDNS/SSDP/NetBIOS (ports 5353,1900)   ║ │  │
+│  │   ║  • Covert handshake: TCP 9631 (magic 0xDEADBEEF)           ║ │  │
+│  │   ╚════════════════════════════════════════════════════════════╝ │  │
+│  │                                                                  │  │
+│  │   ┌──────────┐       ┌──────────┐       ┌──────────┐            │  │
+│  │   │  Edge A  │◄─UDP─►│  Edge B  │◄─UDP─►│  Edge C  │            │  │
+│  │   │  rank=42 │       │  rank=99 │       │  rank=7  │            │  │
+│  │   └──────────┘       └──────────┘       └──────────┘            │  │
+│  │        │                   │                   │                 │  │
+│  │        │     WHO_IS_LEADER │ (broadcast)       │                 │  │
+│  │        │◄──────────────────┼───────────────────►│                │  │
+│  │        │                   │                   │                 │  │
+│  │        │   I_AM_LEADER     │ (rank 99 wins)    │                 │  │
+│  │        │◄──────────────────┤                   │                 │  │
+│  │        │                   │                   │                 │  │
+│  │        ▼                   ▼                   ▼                 │  │
+│  │   ┌──────────┐       ┌──────────┐       ┌──────────┐            │  │
+│  │   │  WORKER  │       │  LEADER  │       │  WORKER  │            │  │
+│  │   └────┬─────┘       └────┬─────┘       └────┬─────┘            │  │
+│  │        │                  │                  │                   │  │
+│  │        │◄───Unix Socket───┤───Unix Socket───►│                   │  │
+│  │        │  (LIPC protocol) │                  │                   │  │
+│  │                           │                                      │  │
+│  │                           │ MQTT to Cloud (6 parallel)           │  │
+│  │                           │ Nonce-based deduplication            │  │
+│  │                           │ Heartbeat every 30s                  │  │
+│  │                           ▼                                      │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────┘
 
-Key:
-  • 1 LAN Cluster = 1 Leader + N Workers
-  • Leader connects to up to 10 Cloud nodes for redundancy
-  • Workers only communicate with their local Leader via IPC
+LAN Cluster Details:
+  • P2P discovery runs continuously (election.rs, zero_noise.rs)
+  • Election: UDP broadcast WHO_IS_LEADER on port 31338, wait 3s, highest rank claims LEADER
+  • LIPC protocol: Magic 0xCAFEBABE, types: Hello (0x01), Data (0x02), Heartbeat (0x03)
+  • Workers connect to Leader via Unix Domain Socket (/tmp/phantom_edge.sock)
+  • Leader uses MultiCloudManager to connect up to 6 Cloud nodes simultaneously
+  • Outgoing messages broadcast to ALL connected Clouds (via tokio broadcast channel)
+  • Incoming commands deduplicated by nonce bytes [1:5] (LRU cache 256, cmd < 5 bytes = no dedup)
+  • Bootstrap resolution cached to /var/tmp/.phantom_nodes (Linux) or C:\ProgramData\Phantom\ (Windows)
 ```
 
 ### Key Insight: Phantom Blends Into Cloud Mesh
