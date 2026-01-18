@@ -1086,6 +1086,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "socket2 0.5.10",
  "tokio",
  "windows-sys 0.48.0",

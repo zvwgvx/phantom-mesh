@@ -19,6 +19,7 @@ socket2 = "0.5"
 async-trait = "0.1"
 lru = "0.12"
 pnet = "0.34"
+sha2 = "0.10"
 # Windows API for Named Pipes
 
 
