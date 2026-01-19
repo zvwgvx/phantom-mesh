@@ -1,13 +1,10 @@
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::error::Error;
 use log::info;
-use std::os::unix::fs::PermissionsExt;
+use std::net::SocketAddr;
 
 use crate::crypto::{lipc_magic, lipc_magic_prev};
-
-// On Windows this would be Named Pipe. On Mac/Linux, UDS.
-const SOCK_PATH: &str = "/tmp/phantom_edge.sock";
 
 // LIPC Protocol Constants
 pub const HEADER_SIZE: usize = 17;
@@ -40,28 +37,26 @@ pub struct LipcHeader {
 pub struct LocalTransport;
 
 impl LocalTransport {
-    pub async fn bind_server() -> Result<UnixListener, Box<dyn Error + Send + Sync>> {
-        // Clean up old socket
-        let _ = std::fs::remove_file(SOCK_PATH);
-
-        let listener = UnixListener::bind(SOCK_PATH)?;
-        
-        let mut perms = std::fs::metadata(SOCK_PATH)?.permissions();
-        perms.set_mode(0o777);
-        std::fs::set_permissions(SOCK_PATH, perms)?;
-
-        info!("[LocalComm] Bound UDS Server at {}", SOCK_PATH);
+    pub async fn bind_server() -> Result<TcpListener, Box<dyn Error + Send + Sync>> {
+        // Bind to all interfaces for LAN access
+        let addr = "0.0.0.0:31339"; 
+        let listener = TcpListener::bind(addr).await?;
+        info!("[LocalComm] Bound TCP Server at {}", addr);
         Ok(listener)
     }
 
-    pub async fn connect_client() -> Result<UnixStream, Box<dyn Error + Send + Sync>> {
-        let stream = UnixStream::connect(SOCK_PATH).await?;
-        info!("[LocalComm] Connected to Leader via UDS");
+    pub async fn connect_client(leader_addr: SocketAddr) -> Result<TcpStream, Box<dyn Error + Send + Sync>> {
+        // Connect to Leader's IP on Port 31339
+        let mut target = leader_addr;
+        target.set_port(31339);
+        
+        let stream = TcpStream::connect(target).await?;
+        info!("[LocalComm] Connected to Leader at {}", target);
         Ok(stream)
     }
 
     /// Reads a full LIPC frame from the stream
-    pub async fn read_frame(stream: &mut UnixStream) -> Result<(LipcHeader, Vec<u8>), Box<dyn Error + Send + Sync>> {
+    pub async fn read_frame(stream: &mut TcpStream) -> Result<(LipcHeader, Vec<u8>), Box<dyn Error + Send + Sync>> {
         let mut head_buf = [0u8; HEADER_SIZE];
         stream.read_exact(&mut head_buf).await?;
 
@@ -92,7 +87,7 @@ impl LocalTransport {
 
     /// Writes a full LIPC frame to the stream
     pub async fn write_frame(
-        stream: &mut UnixStream,
+        stream: &mut TcpStream,
         worker_id: u64,
         msg_type: LipcMsgType,
         payload: &[u8],

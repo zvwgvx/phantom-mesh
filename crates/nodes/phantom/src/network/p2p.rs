@@ -61,7 +61,6 @@ impl P2PService {
         let socket = self.socket.clone();
         let me = self.clone();
 
-        // 1. Receive Loop
         tokio::spawn(async move {
             let mut buf = [0u8; 2048];
             loop {
@@ -74,7 +73,6 @@ impl P2PService {
             }
         });
 
-        // 2. Gossip Loop (60s)
         let me_gossip = self.clone();
         tokio::spawn(async move {
             loop {
@@ -176,23 +174,21 @@ impl P2PService {
             return (0, 0);
         }
         
-        // Generate unique request ID
         let req_id: u32 = rand::thread_rng().gen();
         
-        // Get our local address for the origin
         let local_addr = self.socket.local_addr().ok();
         let (origin_ip, origin_port) = match local_addr {
             Some(addr) => {
                 if let std::net::IpAddr::V4(ip) = addr.ip() {
                     (u32::from(ip), addr.port())
                 } else {
-                    (0x7F000001u32, P2P_PORT) // localhost fallback
+                    (0x7F000001u32, P2P_PORT)
                 }
             }
             None => (0x7F000001u32, P2P_PORT),
         };
         
-        // Build CountRequest: [Magic(4)][Type=3(1)][ReqID(4)][TTL(1)][OriginIP(4)][OriginPort(2)]
+        // [Magic(4)][Type=3(1)][ReqID(4)][TTL(1)][OriginIP(4)][OriginPort(2)]
         let mut pkt = Vec::with_capacity(16);
         pkt.extend_from_slice(&p2p_magic().to_be_bytes());
         pkt.push(WireConstants::P2P_TYPE_COUNT_REQ);
@@ -208,7 +204,6 @@ impl P2PService {
         }
         info!("[P2P] Sent COUNT_REQUEST (id={:08x}) to {} peers", req_id, peers.len());
         
-        // Collect responses with timeout
         let mut responses = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         
@@ -218,7 +213,6 @@ impl P2PService {
                 break;
             }
             
-            // Try to receive from channel with timeout
             let rx = self.count_rx.clone();
             let result = tokio::time::timeout(remaining, async {
                 let mut guard = rx.lock().unwrap();

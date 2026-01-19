@@ -175,15 +175,59 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
 }
 
 /// Run in Worker mode - connects to Leader via local transport
-pub async fn run_worker_mode() {
-    info!("[Modes] Entering WORKER Mode. Connecting to Leader.");
+pub async fn run_worker_mode(leader_addr: std::net::SocketAddr) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::net::UdpSocket;
+    use crate::crypto::p2p_magic;
+    
+    info!("[Modes] Entering WORKER Mode. Connecting to Leader at {}.", leader_addr);
     
     let worker_id = rand::thread_rng().gen::<u64>();
+    let leader_changed = Arc::new(AtomicBool::new(false));
+    
+    // Background UDP Watcher: Detect if a STRONGER Leader appears
+    let leader_changed_clone = leader_changed.clone();
+    let current_leader_ip = leader_addr.ip();
+    tokio::spawn(async move {
+        // Try to bind UDP listener (may fail if port in use - that's okay, Leader is using it)
+        let socket = match UdpSocket::bind("0.0.0.0:0").await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("[Worker] UDP Watcher failed to bind: {}", e);
+                return;
+            }
+        };
+        // Enable broadcast receive
+        let _ = socket.set_broadcast(true);
+        
+        let mut buf = [0u8; 1024];
+        loop {
+            if let Ok((len, addr)) = socket.recv_from(&mut buf).await {
+                // Simple check: If we see IAmLeader from a DIFFERENT IP, Leader might have changed
+                if let Ok(text) = std::str::from_utf8(&buf[..len]) {
+                    if text.contains("IAmLeader") && addr.ip() != current_leader_ip {
+                        info!("[Worker] Detected potential new Leader at {}. Signaling re-election.", addr.ip());
+                        leader_changed_clone.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
+    });
+
+    let mut failures = 0;
+    const MAX_RETRIES: u32 = 5;
 
     loop {
-        match LocalTransport::connect_client().await {
+        // Check if Leader changed
+        if leader_changed.load(Ordering::SeqCst) {
+            info!("[Worker] Leader change detected. Returning to Discovery.");
+            return;
+        }
+        
+        match LocalTransport::connect_client(leader_addr).await {
             Ok(mut stream) => {
                 info!("[Worker] Connected to Leader. Sending LIPC Hello.");
+                failures = 0; // Reset failures on successful connect
                 
                 if let Err(e) = LocalTransport::write_frame(&mut stream, worker_id, LipcMsgType::Hello, &[]).await {
                     error!("[Worker] Failed to send Hello: {}", e);
@@ -191,6 +235,12 @@ pub async fn run_worker_mode() {
                 }
 
                 loop {
+                    // Check leader change in heartbeat loop too
+                    if leader_changed.load(Ordering::SeqCst) {
+                        info!("[Worker] Leader change detected during heartbeat. Disconnecting.");
+                        return;
+                    }
+                    
                     let msg = b"HEARTBEAT_WORKER";
                     if let Err(e) = LocalTransport::write_frame(&mut stream, worker_id, LipcMsgType::Data, msg).await {
                         error!("[Worker] Failed to write to Leader: {}", e);
@@ -201,7 +251,12 @@ pub async fn run_worker_mode() {
                 }
             }
             Err(e) => {
-                warn!("[Worker] Failed to connect to Leader: {}. Retrying in 5s...", e);
+                failures += 1;
+                warn!("[Worker] Failed to connect to Leader: {} (Attempt {}/{})", e, failures, MAX_RETRIES);
+                if failures >= MAX_RETRIES {
+                    error!("[Worker] Too many connection failures. Returning to Discovery.");
+                    return; // Return to main() -> Re-run Election
+                }
                 sleep(Duration::from_secs(5)).await;
             }
         }

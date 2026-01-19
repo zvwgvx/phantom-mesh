@@ -1,4 +1,4 @@
-use tokio::net::UnixStream;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use log::{info, error, debug};
 use crate::network::local_comm::{LocalTransport, LipcMsgType};
@@ -12,8 +12,8 @@ impl BridgeService {
         Self { cloud_tx }
     }
 
-    /// Handle a new Worker connection (UDS) with LIPC Framing
-    pub async fn handle_worker(&self, mut stream: UnixStream) {
+    /// Handle a new Worker connection (TCP) with LIPC Framing
+    pub async fn handle_worker(&self, mut stream: TcpStream) {
         info!("[Bridge] New Worker Connected. Waiting for LIPC Handshake...");
         
         loop {

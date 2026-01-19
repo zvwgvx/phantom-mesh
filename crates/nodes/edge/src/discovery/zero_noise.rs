@@ -20,7 +20,7 @@ const ALLOWED_OUIS: &[&[u8; 3]] = &[
     // Add real OUIs here
 ];
 
-const FILTER_PORTS: &[u16] = &[5353, 1900, 137, 67, 68];
+const FILTER_PORTS: &[u16] = &[5353, 1900, 137, 67, 68, 31338];
 
 struct TargetInfo {
     ip: String,

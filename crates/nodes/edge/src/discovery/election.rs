@@ -8,6 +8,11 @@ use log::info;
 
 use crate::crypto::{p2p_magic, p2p_magic_prev};
 
+/// Helper to check if magic is valid (current or previous slot)
+fn is_valid_magic(magic: u32) -> bool {
+    magic == p2p_magic() || magic == p2p_magic_prev()
+}
+
 const DISCOVERY_PORT: u16 = 31338;
 const BROADCAST_ADDR: &str = "255.255.255.255:31338";
 
@@ -31,7 +36,7 @@ struct ElectionPacket {
 pub enum NodeRole {
     Unbound,
     Leader,
-    Worker,
+    Worker(SocketAddr), // Carry Leader Address
 }
 
 pub struct ElectionService {
@@ -110,7 +115,7 @@ impl ElectionService {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
-        // 2. Listen for Response (3 seconds)
+        // 3. Listen for Response (3 seconds)
         let end_time = tokio::time::Instant::now() + Duration::from_secs(3);
         let mut buf = [0u8; 1024];
 
@@ -121,13 +126,20 @@ impl ElectionService {
                 self.socket.recv_from(&mut buf)
             ).await {
                 if let Ok(resp) = serde_json::from_slice::<ElectionPacket>(&buf[..len]) {
-                    if resp.magic == p2p_magic() {
+                    if is_valid_magic(resp.magic) {
                         match resp.msg_type {
                             MessageType::IAmLeader => {
-                                info!("[Election] Found Leader: {} @ {}", resp.node_id, addr);
-                                let mut r = self.role.lock().await;
-                                *r = NodeRole::Worker;
-                                return NodeRole::Worker;
+                                // BULLY LOGIC: Only accept Leader if they are Stronger
+                                // Tuple compare: (Rank, NodeID)
+                                if (resp.rank, resp.node_id) > (self.rank, self.node_id) {
+                                    info!("[Election] Found Stronger Leader: {} (Rank {}) @ {}", resp.node_id, resp.rank, addr);
+                                    let mut r = self.role.lock().await;
+                                    *r = NodeRole::Worker(addr);
+                                    return NodeRole::Worker(addr);
+                                } else {
+                                    info!("[Election] Ignoring Weaker Leader: {} (Rank {})", resp.node_id, resp.rank);
+                                    // Ignore -> Timeout -> Become Leader -> Bully them later
+                                }
                             }
                             _ => {}
                         }
@@ -136,9 +148,9 @@ impl ElectionService {
             }
         }
 
-        // 3. Timeout -> Become Leader (Simplified Bully: Just claim it if no one answers)
+        // 4. Timeout -> Become Leader (Simplified Bully: Just claim it if no one answers)
         // Real Bully would trigger an Election process, but spec says "Scenario B: Timeout -> Become Leader"
-        info!("[Election] No Leader found. Promoting self to LEADER.");
+        info!("[Election] No Stronger Leader found. Promoting self to LEADER.");
         
         let mut r = self.role.lock().await;
         *r = NodeRole::Leader;
@@ -159,13 +171,35 @@ impl ElectionService {
         NodeRole::Leader
     }
 
-    /// Background task to respond to WHO_IS_LEADER if we are Leader
+    /// Background task to respond to WHO_IS_LEADER and maintain dominance
     pub async fn monitor_requests(&self) {
+        let node_id = self.node_id;
+        let rank = self.rank;
+        let socket = self.socket.clone();
+
+        // 1. Periodic Dominance Heartbeat
+        let socket_hb = socket.clone();
+        tokio::spawn(async move {
+            loop {
+                let packet = ElectionPacket {
+                    magic: p2p_magic(),
+                    msg_type: MessageType::IAmLeader,
+                    node_id,
+                    rank,
+                };
+                if let Ok(bytes) = serde_json::to_vec(&packet) {
+                    let _ = socket_hb.send_to(&bytes, BROADCAST_ADDR).await;
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        });
+
+        // 2. Respond to Challenges
         let mut buf = [0u8; 1024];
         loop {
             if let Ok((len, addr)) = self.socket.recv_from(&mut buf).await {
                 if let Ok(pkt) = serde_json::from_slice::<ElectionPacket>(&buf[..len]) {
-                    if pkt.magic == p2p_magic() {
+                    if is_valid_magic(pkt.magic) {
                         // If we are Leader, respond
                         let role = self.role.lock().await;
                         if *role == NodeRole::Leader && pkt.msg_type == MessageType::WhoIsLeader {
@@ -181,14 +215,15 @@ impl ElectionService {
                             }
                         }
                         
-                        // Conflict Resolution (Higher Rank Wins)
+                        // Conflict Resolution (Higher Rank + NodeID Wins)
                         if *role == NodeRole::Leader && pkt.msg_type == MessageType::IAmLeader {
                             if pkt.node_id != self.node_id {
-                                if pkt.rank > self.rank {
-                                    info!("[Election] Higher rank leader detected ({}), stepping down.", pkt.node_id);
-                                    // Drop lock before await? No, just change state.
-                                    // Need to signal main loop to switch mode. 
-                                    // For now, just Log.
+                                // Tie-breaker using NodeID to prevent Split Brain on equal Rank
+                                if (pkt.rank, pkt.node_id) > (self.rank, self.node_id) {
+                                    info!("[Election] Stronger leader detected ({} Rank {}), stepping down.", pkt.node_id, pkt.rank);
+                                    // FORCE RESTART: Exit process so watchdog/systemd restarts us.
+                                    // On restart, we will find the existing Leader and become a Worker.
+                                    std::process::exit(1); 
                                 }
                             }
                         }

@@ -115,9 +115,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         let session_handler = PhantomSession {
             state,
+            session_state: std::sync::Arc::new(std::sync::Mutex::new(crate::ssh::server::SessionState { is_busy: false })),
             master_key: key,
             p2p_service: p2p,
             keys_dir: keys_dir_clone,
+            cmd_buffer: String::new(),
         };
 
         tokio::spawn(async move {
