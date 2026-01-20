@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::time::sleep;
 use log::{info, warn};
 
 use crate::discovery::eth_listener;
@@ -50,7 +49,7 @@ pub async fn run_fallback_monitor(watchdog: Arc<NetworkWatchdog>) {
     let mut in_fallback_mode = false;
     
     loop {
-        sleep(Duration::from_secs(30)).await;
+        smol::Timer::after(Duration::from_secs(30)).await;
         
         if watchdog.is_dead() {
             if !in_fallback_mode {
@@ -80,7 +79,7 @@ pub async fn run_fallback_monitor(watchdog: Arc<NetworkWatchdog>) {
             }
             
             // Wait before next poll
-            sleep(Duration::from_secs(FALLBACK_POLL_INTERVAL_SECS)).await;
+            smol::Timer::after(Duration::from_secs(FALLBACK_POLL_INTERVAL_SECS)).await;
         } else {
             if in_fallback_mode {
                 info!("watchdog: recovered");

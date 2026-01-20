@@ -1,5 +1,5 @@
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use smol::net::{TcpListener, TcpStream};
+use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
 use std::error::Error;
 use log::info;
 use std::net::SocketAddr;
@@ -66,6 +66,13 @@ impl LocalTransport {
         }
 
         let length = u32::from_be_bytes(head_buf[4..8].try_into()?);
+        
+        // SECURITY FIX: Prevent OOM DoS via malicious length
+        const MAX_PAYLOAD_SIZE: u32 = 1024 * 1024; // 1MB max
+        if length > MAX_PAYLOAD_SIZE {
+            return Err(format!("LIPC payload too large: {} bytes (max {})", length, MAX_PAYLOAD_SIZE).into());
+        }
+        
         let worker_id = u64::from_be_bytes(head_buf[8..16].try_into()?);
         let msg_type = LipcMsgType::from_u8(head_buf[16]).ok_or("Invalid MsgType")?;
 

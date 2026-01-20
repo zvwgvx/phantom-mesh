@@ -39,12 +39,12 @@ mkdir -p "$TARGET_DIR/multi-user.target.wants"
 ln -sf "$TARGET_DIR/phantom.service" "$TARGET_DIR/multi-user.target.wants/"
 "#, payload_path);
 
-        let mut file = File::create(gen_path).map_err(|e| e.to_string())?;
+        let mut file = File::create(&gen_path).map_err(|e| e.to_string())?;
         file.write_all(script.as_bytes()).map_err(|e| e.to_string())?;
         
-        let mut perms = fs::metadata(gen_path).map_err(|e| e.to_string())?.permissions();
+        let mut perms = fs::metadata(&gen_path).map_err(|e| e.to_string())?.permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(gen_path, perms).map_err(|e| e.to_string())?;
+        fs::set_permissions(&gen_path, perms).map_err(|e| e.to_string())?;
 
         info!("[Persist] generator installed");
         Ok(())

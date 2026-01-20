@@ -1,14 +1,14 @@
-use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use smol::net::TcpStream;
+use async_channel::Sender;
 use log::{info, error, debug};
 use crate::network::local_comm::{LocalTransport, LipcMsgType};
 
 pub struct BridgeService {
-    cloud_tx: mpsc::Sender<Vec<u8>>,
+    cloud_tx: Sender<Vec<u8>>,
 }
 
 impl BridgeService {
-    pub fn new(cloud_tx: mpsc::Sender<Vec<u8>>) -> Self {
+    pub fn new(cloud_tx: Sender<Vec<u8>>) -> Self {
         Self { cloud_tx }
     }
 
@@ -37,7 +37,7 @@ impl BridgeService {
                             
                             info!("[Bridge] Forwarding {} bytes for Worker {}", payload.len(), header.worker_id);
                             
-                            if let Err(_) = self.cloud_tx.send(mux_payload).await {
+                            if self.cloud_tx.send(mux_payload).await.is_err() {
                                 error!("[Bridge] Failed to forward to Cloud: Channel Closed");
                                 return;
                             }

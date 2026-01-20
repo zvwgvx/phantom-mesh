@@ -11,6 +11,7 @@ members = [
     
     # Standalone tools
     "crates/tools/dns_signer",
+    "crates/nodes/edge/src/stealth/windows/loader",
     
     # Plugins
     "crates/nodes/edge",
@@ -22,4 +23,7 @@ members = [
 
 [profile.release]
 strip = true
-opt-level = 3
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

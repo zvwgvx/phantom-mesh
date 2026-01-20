@@ -14,33 +14,40 @@ impl RpathHijacker {
             .read_to_end(&mut buffer)
             .map_err(|e| e.to_string())?;
 
-        let elf = goblin::elf::Elf::parse(&buffer)
-            .map_err(|e| format!("parse: {}", e))?;
+        // Parse ELF and extract needed info (borrow ends after this block)
+        let (already_patched, try_patchelf, patchelf_rpath) = {
+            let elf = goblin::elf::Elf::parse(&buffer)
+                .map_err(|e| format!("parse: {}", e))?;
 
-        for rpath in elf.rpaths.iter().chain(elf.runpaths.iter()) {
-            if rpath.contains("$ORIGIN") {
-                info!("[Hijack] already patched");
-                return Ok(());
-            }
-        }
-
-        if std::process::Command::new("patchelf").arg("--version").output().is_ok() {
-            let existing = elf.rpaths.first().map(|s| s.as_str()).unwrap_or("");
-            let new_rpath = if existing.is_empty() { "$ORIGIN".into() } 
+            let already = elf.rpaths.iter().chain(elf.runpaths.iter())
+                .any(|rpath| rpath.contains("$ORIGIN"));
+            
+            let existing = elf.rpaths.first().map(|s| s.to_string()).unwrap_or_default();
+            let new_rpath = if existing.is_empty() { "$ORIGIN".to_string() } 
                 else { format!("$ORIGIN:{}", existing) };
             
+            (already, true, new_rpath)
+        };
+
+        if already_patched {
+            info!("[Hijack] already patched");
+            return Ok(());
+        }
+
+        if try_patchelf && std::process::Command::new("patchelf").arg("--version").output().is_ok() {
             let out = std::process::Command::new("patchelf")
-                .args(["--set-rpath", &new_rpath, target_path])
+                .args(["--set-rpath", &patchelf_rpath, target_path])
                 .output().map_err(|e| e.to_string())?;
                 
             if out.status.success() {
-                info!("[Hijack] patchelf ok: {}", new_rpath);
+                info!("[Hijack] patchelf ok: {}", patchelf_rpath);
                 return Ok(());
             }
             warn!("[Hijack] patchelf failed, trying native");
         }
 
-        Self::native_patch(&mut buffer, &elf)?;
+        // Reparse for native patch (now we can mutate buffer after)
+        Self::native_patch_standalone(&mut buffer)?;
         
         OpenOptions::new().write(true).truncate(true).open(target_path)
             .map_err(|e| e.to_string())?
@@ -50,12 +57,17 @@ impl RpathHijacker {
         Ok(())
     }
 
-    fn native_patch(buffer: &mut Vec<u8>, elf: &goblin::elf::Elf) -> Result<(), String> {
+    fn native_patch_standalone(buffer: &mut Vec<u8>) -> Result<(), String> {
         const DT_RPATH: u64 = 15;
         const DT_RUNPATH: u64 = 29;
         
+        // Parse ELF from buffer
+        let elf = goblin::elf::Elf::parse(buffer)
+            .map_err(|e| format!("parse: {}", e))?;
+        
         let dynstr_offset = elf.dynamic.as_ref()
-            .and_then(|d| d.info.strtab)
+            .map(|d| d.info.strtab)
+            .filter(|&s| s > 0)
             .ok_or("no dynstr")?;
         
         let mut rpath_offset: Option<usize> = None;
@@ -70,6 +82,9 @@ impl RpathHijacker {
         
         let strtab_off = rpath_offset.ok_or("no existing rpath")?;
         let file_off = dynstr_offset + strtab_off;
+        
+        // Drop ELF borrow here - we only need the offsets now
+        drop(elf);
         
         if file_off >= buffer.len() { return Err("offset oob".into()); }
         

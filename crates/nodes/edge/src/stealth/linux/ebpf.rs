@@ -59,10 +59,14 @@ impl EbpfManager {
 }
 
 fn check_kernel_support() {
-    let output = Command::new("uname").arg("-r").output().unwrap_or_else(|_| 
-        std::process::Output { status: std::process::ExitStatus::from_raw(0), stdout: vec![], stderr: vec![] }
-    );
-    let release = String::from_utf8_lossy(&output.stdout);
-    info!("[eBPF] Kernel Release: {}", release.trim());
-    // Parse version? 
+    let output = Command::new("uname").arg("-r").output();
+    match output {
+        Ok(out) => {
+            let release = String::from_utf8_lossy(&out.stdout);
+            info!("[eBPF] Kernel Release: {}", release.trim());
+        }
+        Err(_) => {
+            warn!("[eBPF] Could not determine kernel version");
+        }
+    }
 }

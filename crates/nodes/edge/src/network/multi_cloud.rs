@@ -2,10 +2,12 @@
 //!
 //! Manages connections to multiple Cloud nodes simultaneously for redundancy.
 //! Commands are deduplicated by nonce to prevent duplicate execution.
+//! Using smol/async-channel for lightweight async.
 
 use std::sync::Arc;
 use std::num::NonZeroUsize;
-use tokio::sync::{mpsc, Mutex};
+use async_channel::{Sender, Receiver};
+use async_lock::Mutex;
 use log::{info, warn, debug};
 use lru::LruCache;
 
@@ -52,37 +54,48 @@ impl MultiCloudManager {
     /// Commands from any Cloud are sent to cmd_tx after deduplication
     pub async fn start_all(
         &self,
-        cmd_tx: mpsc::Sender<Vec<u8>>,
-        msg_rx: mpsc::Receiver<Vec<u8>>,
+        cmd_tx: Sender<Vec<u8>>,
+        msg_rx: Receiver<Vec<u8>>,
     ) {
         if self.clients.is_empty() {
             warn!("[MultiCloud] No Cloud nodes configured!");
             return;
         }
 
-        // Create broadcast channel for outgoing messages
-        let (broadcast_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(100);
-        
-        // Spawn receiver task to forward from msg_rx to broadcast
-        let broadcast_tx_clone = broadcast_tx.clone();
-        tokio::spawn(async move {
-            let mut rx = msg_rx;
-            while let Some(msg) = rx.recv().await {
-                let _ = broadcast_tx_clone.send(msg);
-            }
-        });
+        // Store senders to broadcast messages to all clients
+        let mut client_senders = Vec::new();
 
         // Spawn connection task for each Cloud node
         for (idx, client) in self.clients.iter().enumerate() {
             let client = client.clone();
             let cmd_tx = cmd_tx.clone();
             let seen_nonces = self.seen_nonces.clone();
-            let mut broadcast_rx = broadcast_tx.subscribe();
             
-            tokio::spawn(async move {
-                Self::run_client_loop(idx, client, cmd_tx, seen_nonces, broadcast_rx).await;
-            });
+            // Create internal channels for this client
+            let (internal_msg_tx, internal_msg_rx) = async_channel::bounded::<Vec<u8>>(100);
+            client_senders.push(internal_msg_tx);
+
+            // Spawn client loop
+            smol::spawn(async move {
+                Self::run_client_loop(idx, client, cmd_tx, seen_nonces, internal_msg_rx).await;
+            }).detach();
         }
+
+        // Spawn Distributor Task (Fan-out)
+        // Reads from main msg_rx and broadcasts to ALL clients for redundancy
+        smol::spawn(async move {
+            info!("[MultiCloud] Distributor started. Broadcasting to {} clients.", client_senders.len());
+            while let Ok(msg) = msg_rx.recv().await {
+                for (i, tx) in client_senders.iter().enumerate() {
+                    // Try to send to each client. If full, drop (don't block everyone).
+                    // Cloning the message for each client is necessary.
+                    if let Err(_) = tx.try_send(msg.clone()) {
+                        debug!("[MultiCloud] Client {} queue full/closed, dropping msg", i);
+                    }
+                }
+            }
+            warn!("[MultiCloud] Distributor stopped (input channel closed)");
+        }).detach();
         
         info!("[MultiCloud] All {} Cloud connections started", self.clients.len());
     }
@@ -91,32 +104,22 @@ impl MultiCloudManager {
     async fn run_client_loop(
         idx: usize,
         client: Arc<PolyMqttClient>,
-        cmd_tx: mpsc::Sender<Vec<u8>>,
+        cmd_tx: Sender<Vec<u8>>,
         seen_nonces: Arc<Mutex<LruCache<u32, ()>>>,
-        mut broadcast_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+        internal_msg_rx: Receiver<Vec<u8>>,
     ) {
-        // Create internal channels for this client
-        let (internal_msg_tx, internal_msg_rx) = mpsc::channel::<Vec<u8>>(100);
-        let (internal_cmd_tx, mut internal_cmd_rx) = mpsc::channel::<Vec<u8>>(100);
+        // Internal command channel handling
+        let (internal_cmd_tx, internal_cmd_rx) = async_channel::bounded::<Vec<u8>>(100);
         
         // Start the client's persistent loop
+        // It reads from internal_msg_rx and writes to internal_cmd_tx
         let client_for_loop = client.clone();
-        tokio::spawn(async move {
+        smol::spawn(async move {
             client_for_loop.start_persistent_loop(internal_msg_rx, internal_cmd_tx).await;
-        });
-        
-        // Forward broadcast messages to this client
-        let msg_tx = internal_msg_tx.clone();
-        tokio::spawn(async move {
-            while let Ok(msg) = broadcast_rx.recv().await {
-                if msg_tx.send(msg).await.is_err() {
-                    break;
-                }
-            }
-        });
+        }).detach();
         
         // Process incoming commands with deduplication
-        while let Some(cmd) = internal_cmd_rx.recv().await {
+        while let Ok(cmd) = internal_cmd_rx.recv().await {
             if cmd.len() < 5 {
                 // Too short to contain nonce, forward anyway
                 if cmd_tx.send(cmd).await.is_err() {

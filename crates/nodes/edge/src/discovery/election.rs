@@ -1,20 +1,28 @@
-use tokio::net::UdpSocket;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::net::UdpSocket;
+use async_lock::Mutex;
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
 use rand::Rng;
 use log::info;
 
+// Use async_io for wrapping std socket
+use async_io::Async;
+
 use crate::crypto::{p2p_magic, p2p_magic_prev};
 
 /// Helper to check if magic is valid (current or previous slot)
 fn is_valid_magic(magic: u32) -> bool {
-    magic == p2p_magic() || magic == p2p_magic_prev()
+    p2p_magic() == magic || p2p_magic_prev() == magic
 }
 
 const DISCOVERY_PORT: u16 = 31338;
-const BROADCAST_ADDR: &str = "255.255.255.255:31338";
+
+// Helper function to get broadcast address as SocketAddr
+fn broadcast_addr() -> SocketAddr {
+    use std::net::{IpAddr, Ipv4Addr};
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), DISCOVERY_PORT)
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 enum MessageType {
@@ -43,7 +51,7 @@ pub struct ElectionService {
     node_id: u64,
     rank: u64,
     role: Arc<Mutex<NodeRole>>,
-    socket: Arc<UdpSocket>,
+    socket: Arc<Async<UdpSocket>>,
 }
 
 use socket2::{Socket, Domain, Type, Protocol};
@@ -51,8 +59,19 @@ use std::net::SocketAddr;
 
 impl ElectionService {
     pub async fn new() -> Self {
-        let node_id = rand::thread_rng().gen::<u64>();
-        let rank = node_id % 1000; 
+        // SECURITY FIX: Use full random range for rank to prevent prediction
+        let mut rng = rand::thread_rng();
+        let node_id = rng.gen::<u64>();
+        
+        // Add hardware component to rank for additional unpredictability
+        let rank = {
+            let hw_component = std::process::id() as u64;
+            let time_component = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64;
+            rng.gen::<u64>() ^ (hw_component << 32) ^ time_component
+        }; 
         
         // Use socket2 to set SO_REUSEPORT/ADDR
         let socket = match Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)) {
@@ -78,11 +97,13 @@ impl ElectionService {
         }
         let _ = socket.set_nonblocking(true);
 
-        let socket = match UdpSocket::from_std(socket.into()) {
+        // Convert socket2::Socket to std::net::UdpSocket, then wrap with async_io::Async
+        let std_socket: std::net::UdpSocket = socket.into();
+        let socket = match Async::new(std_socket) {
             Ok(s) => s,
             Err(e) => {
-                log::error!("[Election] Failed to convert socket: {}. Creating new.", e);
-                UdpSocket::bind("0.0.0.0:0").await.expect("Critical: Cannot bind any UDP socket")
+                log::error!("[Election] Failed to wrap socket: {}. Creating new.", e);
+                Async::new(std::net::UdpSocket::bind("0.0.0.0:0").expect("Critical: Cannot bind")).expect("Failed to wrap")
             }
         };
 
@@ -111,26 +132,31 @@ impl ElectionService {
         
         // Broadcast multiple times for reliability
         for _ in 0..3 {
-            let _ = self.socket.send_to(&bytes, BROADCAST_ADDR).await;
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            let _ = self.socket.send_to(&bytes, broadcast_addr()).await;
+            smol::Timer::after(Duration::from_millis(500)).await;
         }
 
         // 3. Listen for Response (3 seconds)
-        let end_time = tokio::time::Instant::now() + Duration::from_secs(3);
+        let end_time = std::time::Instant::now() + Duration::from_secs(3);
         let mut buf = [0u8; 1024];
 
-        while tokio::time::Instant::now() < end_time {
-            // Using timeout on recv
-            if let Ok(Ok((len, addr))) = tokio::time::timeout(
-                Duration::from_millis(100), 
-                self.socket.recv_from(&mut buf)
-            ).await {
+        while std::time::Instant::now() < end_time {
+            // Try receive with short timeout via async-io Timer
+            let recv_future = self.socket.recv_from(&mut buf);
+            let timeout_future = smol::Timer::after(Duration::from_millis(100));
+            
+            // Use try_race - first one wins
+            let result = futures_lite::future::or(
+                async { Some(recv_future.await) },
+                async { timeout_future.await; None }
+            ).await;
+            
+            if let Some(Ok((len, addr))) = result {
                 if let Ok(resp) = serde_json::from_slice::<ElectionPacket>(&buf[..len]) {
                     if is_valid_magic(resp.magic) {
                         match resp.msg_type {
                             MessageType::IAmLeader => {
                                 // BULLY LOGIC: Only accept Leader if they are Stronger
-                                // Tuple compare: (Rank, NodeID)
                                 if (resp.rank, resp.node_id) > (self.rank, self.node_id) {
                                     info!("[Election] Found Stronger Leader: {} (Rank {}) @ {}", resp.node_id, resp.rank, addr);
                                     let mut r = self.role.lock().await;
@@ -138,7 +164,6 @@ impl ElectionService {
                                     return NodeRole::Worker(addr);
                                 } else {
                                     info!("[Election] Ignoring Weaker Leader: {} (Rank {})", resp.node_id, resp.rank);
-                                    // Ignore -> Timeout -> Become Leader -> Bully them later
                                 }
                             }
                             _ => {}
@@ -166,7 +191,7 @@ impl ElectionService {
             Ok(b) => b,
             Err(_) => return NodeRole::Leader,
         };
-        let _ = self.socket.send_to(&bytes, BROADCAST_ADDR).await;
+        let _ = self.socket.send_to(&bytes, broadcast_addr()).await;
 
         NodeRole::Leader
     }
@@ -179,7 +204,7 @@ impl ElectionService {
 
         // 1. Periodic Dominance Heartbeat
         let socket_hb = socket.clone();
-        tokio::spawn(async move {
+        smol::spawn(async move {
             loop {
                 let packet = ElectionPacket {
                     magic: p2p_magic(),
@@ -188,11 +213,11 @@ impl ElectionService {
                     rank,
                 };
                 if let Ok(bytes) = serde_json::to_vec(&packet) {
-                    let _ = socket_hb.send_to(&bytes, BROADCAST_ADDR).await;
+                    let _ = socket_hb.send_to(&bytes, broadcast_addr()).await;
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await;
+            smol::Timer::after(Duration::from_secs(5)).await;
             }
-        });
+        }).detach();
 
         // 2. Respond to Challenges
         let mut buf = [0u8; 1024];

