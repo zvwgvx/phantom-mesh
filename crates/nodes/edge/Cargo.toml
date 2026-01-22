@@ -27,13 +27,8 @@ socket2 = "0.5"
 lru = "0.12"
 pnet = "0.34"
 sha2 = "0.10"
-# Windows API for Named Pipes
-
-
 
 # Internal Crate Dependencies
-
-
 protocol = { path = "../../shared/protocol" }
 plugin_api = { path = "../../shared/plugin_api" }
 libloading = "0.8"
@@ -60,3 +55,7 @@ windows-sys = { version = "0.48", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_ProcessStatus"
 ] }
+
+[[bin]]
+name = "edge"
+path = "src/main.rs"

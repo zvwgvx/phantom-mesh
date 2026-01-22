@@ -61,4 +61,3 @@ async fn async_main() {
         }
     }
 }
-

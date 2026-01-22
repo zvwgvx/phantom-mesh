@@ -159,31 +159,23 @@ fn djb2_wide_lower(s: *const u16, len: usize) -> u32 {
 
 /// Get export function address by DJB2 hash.
 /// Parses the PE export directory to find the function.
+/// HANDLES FORWARDED EXPORTS.
 pub unsafe fn get_export_by_hash(module: *const c_void, func_hash: u32) -> Option<*const c_void> {
     if module.is_null() { return None; }
     
     let dos = module as *const u8;
-    
-    // Validate DOS header magic ("MZ")
     if *(dos as *const u16) != 0x5A4D { return None; }
     
-    // Get e_lfanew (offset to NT headers)
     let e_lfanew = *((dos as usize + 0x3C) as *const i32);
-    if e_lfanew <= 0 { return None; }
-    
     let nt = dos.add(e_lfanew as usize);
-    
-    // Validate PE signature
     if *(nt as *const u32) != 0x00004550 { return None; }
     
-    // Export directory RVA is at NT+0x88 for PE32+ (64-bit)
     let export_rva = *((nt as usize + 0x88) as *const u32);
+    let export_size = *((nt as usize + 0x8C) as *const u32);
     if export_rva == 0 { return None; }
     
     let export = dos.add(export_rva as usize) as *const ImageExportDirectory;
     let num_names = (*export).number_of_names;
-    if num_names == 0 { return None; }
-    
     let names = dos.add((*export).address_of_names as usize) as *const u32;
     let funcs = dos.add((*export).address_of_functions as usize) as *const u32;
     let ordinals = dos.add((*export).address_of_name_ordinals as usize) as *const u16;
@@ -192,29 +184,107 @@ pub unsafe fn get_export_by_hash(module: *const c_void, func_hash: u32) -> Optio
         let name_rva = *names.add(i);
         let name_ptr = dos.add(name_rva as usize);
         
-        // Calculate string length (null-terminated)
         let mut len = 0;
         while *name_ptr.add(len) != 0 { len += 1; }
         
-        // Hash the export name
         let name_slice = std::slice::from_raw_parts(name_ptr, len);
-        let hash = djb2(name_slice);
-        
-        if hash == func_hash {
+        if djb2(name_slice) == func_hash {
             let ordinal = *ordinals.add(i) as usize;
             let func_rva = *funcs.add(ordinal);
+            let func_addr = dos.add(func_rva as usize);
             
-            // Check for forwarded export (RVA within export directory)
-            let export_end = export_rva + *((nt as usize + 0x8C) as *const u32); // Export dir size
-            if func_rva >= export_rva && func_rva < export_end {
-                // This is a forwarded export - not supported in this simple implementation
-                return None;
+            // Check for forwarded export
+            if func_rva >= export_rva && func_rva < (export_rva + export_size) {
+                return resolve_forwarded_export(func_addr);
             }
             
-            return Some(dos.add(func_rva as usize) as *const c_void);
+            return Some(func_addr as *const c_void);
+        }
+    }
+    None
+}
+
+/// Helper to resolve forwarded export string "DLL.Function"
+unsafe fn resolve_forwarded_export(fwd_ptr: *const u8) -> Option<*const c_void> {
+    let mut len = 0;
+    while *fwd_ptr.add(len) != 0 { len += 1; }
+    let fwd_str = std::str::from_utf8(std::slice::from_raw_parts(fwd_ptr, len)).ok()?;
+    
+    // Format: "DLL.Name"
+    let parts: Vec<&str> = fwd_str.splitn(2, '.').collect();
+    if parts.len() != 2 { return None; }
+    
+    let dll_name = parts[0];
+    let func_name = parts[1];
+    
+    // Ensure DLL is loaded
+    // Need to append ".dll" if missing for LoadLibrary
+    let dll_full = if dll_name.to_lowercase().ends_with(".dll") {
+        dll_name.to_string()
+    } else {
+        format!("{}.dll", dll_name)
+    };
+    
+    // Hash module name to check if loaded
+    let dll_bytes = dll_full.as_bytes();
+    let dll_hash = djb2(dll_bytes); // djb2 handles conversion internally? No, we used djb2_wide_lower for modules.
+    
+    // Wait, get_module_by_hash expects hash of wide, lower case string.
+    // Simpler: Just try LoadLibraryA directly.
+    
+    let mut dll_c_str = dll_full.clone().into_bytes();
+    dll_c_str.push(0);
+    
+    // We can't trust get_module_by_hash here easily without converting hash logic
+    // Just force LoadLibraryA (it handles existing modules fast)
+    let h_module = load_library(&dll_c_str)?;
+    
+    // Get export by NAME (not hash)
+    get_export_by_name(h_module, func_name)
+}
+
+/// Get export by name string
+unsafe fn get_export_by_name(module: *const c_void, target_name: &str) -> Option<*const c_void> {
+    if module.is_null() { return None; }
+    let dos = module as *const u8;
+    if *(dos as *const u16) != 0x5A4D { return None; }
+    let e_lfanew = *((dos as usize + 0x3C) as *const i32);
+    let nt = dos.add(e_lfanew as usize);
+    let export_rva = *((nt as usize + 0x88) as *const u32);
+    let export_size = *((nt as usize + 0x8C) as *const u32);
+    if export_rva == 0 { return None; }
+    
+    let export = dos.add(export_rva as usize) as *const ImageExportDirectory;
+    let names = dos.add((*export).address_of_names as usize) as *const u32;
+    let funcs = dos.add((*export).address_of_functions as usize) as *const u32;
+    let ordinals = dos.add((*export).address_of_name_ordinals as usize) as *const u16;
+    
+    for i in 0..(*export).number_of_names as usize {
+        let name_rva = *names.add(i);
+        let name_ptr = dos.add(name_rva as usize);
+        
+        let mut len = 0;
+        while *name_ptr.add(len) != 0 { len += 1; }
+        
+        let name_slice = std::slice::from_raw_parts(name_ptr, len);
+        let name_str = std::str::from_utf8(name_slice).ok()?;
+        
+        if name_str.eq_ignore_ascii_case(target_name) {
+             let ordinal = *ordinals.add(i) as usize;
+            let func_rva = *funcs.add(ordinal);
+            let func_addr = dos.add(func_rva as usize);
+            
+            // Recurse for nested forwarders? Rarely happens but possible.
+            if func_rva >= export_rva && func_rva < (export_rva + export_size) {
+                return resolve_forwarded_export(func_addr);
+            }
+            
+            return Some(func_addr as *const c_void);
         }
     }
     
+    // Handle Ordinal forwarding "#123" if needed? 
+    // Usually names resolve to names.
     None
 }
 
