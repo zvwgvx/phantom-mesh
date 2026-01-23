@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Minimal dependencies for size optimization
-chacha20 = { version = "0.9", default-features = false }
+# Zero external dependencies - all cryptography inline
 
 [target.'cfg(windows)'.dependencies]
 # No external Windows dependencies! Uses Dynamic API resolution.

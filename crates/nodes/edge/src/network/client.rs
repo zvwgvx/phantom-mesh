@@ -103,7 +103,7 @@ impl PolyMqttClient {
         let nonce = Nonce::from_slice(&nonce_bytes);
         
         let ciphertext = cipher.encrypt(nonce, data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Encryption failure: {}", e)))?;
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "E80"))?;
 
         let mut final_payload = Vec::with_capacity(nonce_bytes.len() + ciphertext.len());
         final_payload.extend_from_slice(&nonce_bytes);
@@ -147,7 +147,7 @@ impl PolyMqttClient {
 
         let cipher = ChaCha20Poly1305::new(&self.master_key);
         let plaintext = cipher.decrypt(nonce, ciphertext)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Decryption failure: {}", e)))?;
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "E81"))?;
 
         Ok(plaintext)
     }

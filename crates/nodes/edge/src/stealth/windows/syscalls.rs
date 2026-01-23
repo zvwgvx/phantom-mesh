@@ -49,6 +49,7 @@ pub const HASH_NT_QUERY_INFORMATION_PROCESS: u32 = djb2(b"NtQueryInformationProc
 pub const HASH_NT_OPEN_FILE: u32 = djb2(b"NtOpenFile");
 pub const HASH_NT_MAP_VIEW_OF_SECTION: u32 = djb2(b"NtMapViewOfSection");
 pub const HASH_NT_UNMAP_VIEW_OF_SECTION: u32 = djb2(b"NtUnmapViewOfSection");
+pub const HASH_NT_FLUSH_INSTRUCTION_CACHE: u32 = djb2(b"NtFlushInstructionCache");
 
 // Module hash (verified)
 const HASH_NTDLL: u32 = 0xE91AAD51;
