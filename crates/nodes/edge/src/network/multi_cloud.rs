@@ -11,7 +11,7 @@ use async_lock::Mutex;
 use log::{info, warn, debug};
 use lru::LruCache;
 
-use crate::network::client::PolyMqttClient;
+use crate::n::client::PolyMqttClient;
 
 /// Maximum number of Cloud connections to maintain
 pub const MAX_CLOUD_CONNECTIONS: usize = 6;

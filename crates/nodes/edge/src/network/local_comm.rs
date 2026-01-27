@@ -4,7 +4,7 @@ use std::error::Error;
 use log::info;
 use std::net::SocketAddr;
 
-use crate::crypto::{lipc_magic, lipc_magic_prev};
+use crate::c::{lipc_magic, lipc_magic_prev};
 
 // LIPC Protocol Constants
 pub const HEADER_SIZE: usize = 17;

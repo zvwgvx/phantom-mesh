@@ -16,8 +16,8 @@
 use core::ffi::c_void;
 use core::ptr;
 
-#[cfg(feature = "std")]
-use log::{debug, warn};
+
+
 
 // ============================================================================
 // DJB2 HASH (Compile-time capable)
@@ -678,10 +678,9 @@ pub fn resolve_enhanced(hash: u32) -> Option<Syscall> {
         if let Some(sc) = resolve_syscall_by_hash(hash) {
             return Some(sc);
         }
-        
+
         // Fallback to disk ntdll (via syscalls, no IAT pollution)
-        #[cfg(feature = "std")]
-        debug!("[Syscall] In-memory failed, trying disk via syscalls");
+
         
         let ssn = extract_ssn_from_disk(hash)?;
         let ntdll = get_ntdll_base()?;

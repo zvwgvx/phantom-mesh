@@ -9,7 +9,7 @@ use log::info;
 // Use async_io for wrapping std socket
 use async_io::Async;
 
-use crate::crypto::{p2p_magic, p2p_magic_prev};
+use crate::c::{p2p_magic, p2p_magic_prev};
 
 /// Helper to check if magic is valid (current or previous slot)
 fn is_valid_magic(magic: u32) -> bool {
@@ -37,7 +37,7 @@ struct ElectionPacket {
     magic: u32,
     msg_type: MessageType,
     node_id: u64,
-    rank: u64, // Uptime + Random
+    rank: u64, // Static Startup Rank (Random + Time Component) to break ties
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,8 +85,7 @@ impl ElectionService {
         };
             
         let _ = socket.set_reuse_address(true);
-        #[cfg(not(target_os = "windows"))]
-        let _ = socket.set_reuse_port(true);
+        // set_reuse_port removed for compatibility (SO_REUSEADDR is sufficient)
         let _ = socket.set_broadcast(true);
         
         let addr: SocketAddr = format!("0.0.0.0:{}", DISCOVERY_PORT).parse()

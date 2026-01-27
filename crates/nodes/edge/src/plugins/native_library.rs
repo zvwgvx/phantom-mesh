@@ -7,7 +7,7 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use crate::stealth::windows::api_resolver::{self, djb2};
+use crate::s::windows::api_resolver::{self, djb2};
 
 // Precomputed hashes
 const HASH_KERNEL32: u32 = 0x3E003875;

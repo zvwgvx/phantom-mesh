@@ -118,10 +118,10 @@ edge-linux-arm64:
 	@echo "[Edge] Built Linux ARM64 -> $(DIST_DIR)/edge/edge.linux.arm64"
 
 edge-win-x64:
-	@mkdir -p $(DIST_DIR)/edge
+	@mkdir -p $(DIST_DIR)
 	$(CARGO) build -p edge --release --target $(RUST_WIN_X64)
-	cp target/$(RUST_WIN_X64)/release/edge.exe $(DIST_DIR)/edge/edge.win.x64.exe
-	@echo "[Edge] Built Windows x86_64 -> $(DIST_DIR)/edge/edge.win.x64.exe"
+	cp target/$(RUST_WIN_X64)/release/edge.exe $(DIST_DIR)/edge.exe
+	@echo "[Edge] Built Windows x86_64 -> $(DIST_DIR)/edge.exe"
 
 edge-win-arm64:
 	@mkdir -p $(DIST_DIR)/edge

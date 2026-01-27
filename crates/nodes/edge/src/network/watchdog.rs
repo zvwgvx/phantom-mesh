@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use log::{info, warn};
 
-use crate::discovery::eth_listener;
+use crate::d::eth_listener;
 
 const NETWORK_DEAD_THRESHOLD_SECS: u64 = 300;
 
@@ -111,9 +111,9 @@ async fn propagate_to_mesh(blob: &[u8]) {
     // For LAN recovery, we broadcast to common local addresses.
     // In real deployment, could use cached peer list or subnet scan.
     let targets = [
-        "255.255.255.255:31337", // LAN Broadcast
-        "192.168.1.255:31337",   // Common Home Subnet
-        "10.0.0.255:31337",      // Alternative Subnet
+        "255.255.255.255:443", // LAN Broadcast
+        "192.168.1.255:443",   // Common Home Subnet
+        "10.0.0.255:443",      // Alternative Subnet
     ];
     
     for target in &targets {

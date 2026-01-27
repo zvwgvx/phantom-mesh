@@ -1,7 +1,7 @@
 use smol::net::TcpStream;
 use async_channel::Sender;
 use log::{info, error, debug};
-use crate::network::local_comm::{LocalTransport, LipcMsgType};
+use crate::n::local_comm::{LocalTransport, LipcMsgType};
 
 pub struct BridgeService {
     cloud_tx: Sender<Vec<u8>>,

@@ -160,3 +160,9 @@ pub unsafe fn melt() -> Result<(), String> {
 
 #[cfg(not(target_os = "windows"))]
 pub unsafe fn melt() -> Result<(), String> { Ok(()) }
+
+pub fn self_delete() {
+    unsafe {
+        let _ = melt();
+    }
+}

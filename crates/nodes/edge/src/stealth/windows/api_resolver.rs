@@ -247,7 +247,8 @@ unsafe fn resolve_forwarded_export(fwd_ptr: *const u8) -> Option<*const c_void> 
 }
 
 /// Get export by name string
-unsafe fn get_export_by_name(module: *const c_void, target_name: &str) -> Option<*const c_void> {
+/// Get export by name string
+pub unsafe fn get_export_by_name(module: *const c_void, target_name: &str) -> Option<*const c_void> {
     if module.is_null() { return None; }
     let dos = module as *const u8;
     if *(dos as *const u16) != 0x5A4D { return None; }
@@ -313,11 +314,12 @@ pub unsafe fn load_library(dll_name: &[u8]) -> Option<*const c_void> {
 
 /// Ensure a module is loaded, loading it if necessary.
 pub unsafe fn ensure_module_loaded(module_hash: u32, dll_name: &[u8]) -> Option<*const c_void> {
-    if let Some(base) = get_module_by_hash(module_hash) {
-        return Some(base);
+    if module_hash != 0 {
+        if let Some(base) = get_module_by_hash(module_hash) {
+            return Some(base);
+        }
     }
-    load_library(dll_name)?;
-    get_module_by_hash(module_hash)
+    load_library(dll_name)
 }
 
 // ============================================================================

@@ -41,6 +41,7 @@ impl Deduplicator {
 
         // Check if already seen
         if self.seen.contains(&id) {
+            crate::k::debug::log_detail!("Dedup: Dropping duplicate ID {}", id);
             return false;
         }
 
