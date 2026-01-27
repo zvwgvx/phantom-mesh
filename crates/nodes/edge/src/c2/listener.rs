@@ -14,8 +14,12 @@ pub fn start_listener(state: CommandState) {
 
         loop {
             // calculated jitter
-            // 1. Poll Reddit
-            match reddit.poll_command() {
+            // 1. Poll Reddit (Blocking I/O offloaded)
+            let cmd = smol::unblock(|| {
+                let r = RedditProvider;
+                r.poll_command()
+            }).await;
+            match cmd {
                 Some(cmd) => {
                     if cmd == "active" {
                          if state.set_mode(SystemMode::Active) {

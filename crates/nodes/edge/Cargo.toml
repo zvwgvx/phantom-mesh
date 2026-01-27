@@ -64,6 +64,11 @@ windows-sys = { version = "0.48", features = [
     # "Win32_System_ProcessStatus"
 ] }
 
+[lib]
+name = "edge"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
 [[bin]]
 name = "edge"
 path = "src/main.rs"
