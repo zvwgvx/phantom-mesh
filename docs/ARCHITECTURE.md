@@ -313,15 +313,19 @@ Edge nodes use passive discovery to find each other without generating suspiciou
 
 ## Stealth Subsystem
 
-### Windows Evasion
+### Windows Evasion (Advanced)
 
-| Technique | Implementation |
-|-----------|----------------|
-| **Indirect Syscalls** | Resolve `ntdll.dll` at runtime, no static imports |
-| **Process Ghosting** | Create process from deleted transacted file |
-| **ETW Patching** | Patch `EtwEventWrite` prologue at load time |
-| **AMSI Bypass** | Corrupt `AmsiScanBuffer` return value |
-| **Persistence** | COM hijacking via HKCU registry |
+The Windows stealth engine is built on a **Zero-Dependency, Native API** architecture. It avoids standard CRT functions where possible to minimize import table signatures.
+
+| Technique | Implementation Details |
+|-----------|------------------------|
+| **Hybrid Architecture** | **EXE Drops DLL**: The initial executable is a "dropper" that installs a stealthy DLL (`EdgeUpdate.dll`) and establishes persistence. The DLL contains the core logic. |
+| **Steganography** | **PNG Embedding**: The DLL is compressed (Deflate), encrypted (ChaCha20), and embedded into the `biLn` chunks of a valid PNG image (`logo.png`). The dropper extracts this payload at runtime, avoiding static analysis of the binary. |
+| **COM Hijacking** | **Persistence**: The dropped DLL is registered as an `InprocServer32` for a user-mode CLSID. When standard Windows processes (like `explorer.exe` or `taskhostw.exe`) load this CLSID, they unknowingly load our DLL into their address space. |
+| **Module Pinning** | **Anti-Unload**: Inside `DllMain`, we call `GetModuleHandleExW` with `GET_MODULE_HANDLE_EX_FLAG_PIN`. This increments the reference count, preventing the host process from unloading our DLL even if `DllGetClassObject` returns an error (which we do intentionally to remain stealthy). |
+| **Ghost Protocol** | **AMSI/ETW Bypass**: We use **Indirect Syscalls** (resolving syscall numbers dynamically via "Hell's Gate" or "Halos Gate" techniques) to change the memory permission of `AmsiScanBuffer` to `RWX`, patch it to return `AMSI_RESULT_CLEAN`, and restore permissions to `RX`. This completely blinds Windows Defender. |
+| **Scheduled Task** | **Fail-Safe**: Uses `rundll32.exe` to execute the DLL export `DllGetClassObject` as a secondary persistence mechanism. |
+| **Obfuscated Sleep** | **Memory Encryption**: (Optional) During sleep cycles, `Ekko` or similar timers are used to encrypt the heap and stack, protecting the agent from memory scanners while dormant. |
 
 ### Linux Evasion
 
@@ -340,3 +344,14 @@ Edge nodes use passive discovery to find each other without generating suspiciou
 | **Code Signing** | Ad-hoc signature for Gatekeeper bypass |
 | **Persistence** | LaunchAgent plist in `~/Library/LaunchAgents` |
 | **Transparency** | Disable TCC prompts via synthetic events |
+
+---
+
+## Build Pipeline
+
+The build process is multi-stage to ensure the payload is correctly embedded and obfuscated:
+
+1.  **Compile Core DLL**: `cargo build --lib --release` -> Generates `edge.dll`.
+2.  **Steganography Packing**: `tools/steg_maker` reads `edge.dll`, encrypts it (ChaCha20), compresses it, and injects it into `src/assets/logo.png`.
+3.  **Compile Dropper EXE**: `cargo build --bin edge --release` -> Generates `edge.exe`. This binary effectively contains the PNG, which implies it contains the DLL.
+4.  **Strip & Optimize**: `llvm-strip` and LTO are applied to minimize size (target < 3MB).
